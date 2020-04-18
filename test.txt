@@ -4,3 +4,4 @@ we will back!
 Git has a mutable index called stage.
 remove this file.
 test branch zhuo.
+Creating a new branch is quick & simple.
