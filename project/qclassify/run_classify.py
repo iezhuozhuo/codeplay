@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from classify_utils import DataProcessor, convert_examples_to_features, compute_metrics, get_prob
+from classify_utils import DataProcessor, convert_examples_to_features, compute_metrics, get_prob, write_func
 from transformers import (
     BertConfig,
     BertForSequenceClassification,
@@ -343,7 +343,7 @@ def train(args, train_dataset, model, tokenizer):
     return global_step, tr_loss / global_step
 
 
-def evaluate(args, model, tokenizer, prefix=""):
+def evaluate(args, model, tokenizer):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     # eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
     eval_outputs_dir = os.path.join(args.output_dir, "eval_results/")
@@ -362,7 +362,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         model = torch.nn.DataParallel(model)
 
     # Eval!
-    logger.info("***** Running evaluation {} *****".format(prefix))
+    logger.info("***** Running evaluation *****")
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
     eval_loss = 0.0
@@ -396,9 +396,9 @@ def evaluate(args, model, tokenizer, prefix=""):
     result = compute_metrics(preds, out_label_ids)
     results.update(result)
 
-    output_eval_file = os.path.join(eval_outputs_dir, prefix, "eval_results.tsv")
+    output_eval_file = os.path.join(eval_outputs_dir, "eval_results.tsv")
     with open(output_eval_file, "w") as writer:
-        logger.info("***** Eval results {} *****".format(prefix))
+        logger.info("***** Eval results *****")
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(result[key]))
             # writer.write("%s = %s\n" % (key, str(result[key])))
@@ -452,156 +452,10 @@ def inference(args, model, tokenizer):
         preds = preds.tolist()
         assert len(preds) == len(examples)
         output_eval_file = os.path.join(infer_outputs_dir, "inference_results.tsv")
-        with open(output_eval_file, "w") as writer:
-            for i, pred in enumerate(preds):
-                writer.write("\t".join([examples[i].text_a, str(pred), str(max(probs[i]))])+"\n")
 
-
-def get_args():
-    parser = argparse.ArgumentParser()
-
-    # Required parameters
-    parser.add_argument(
-        "--model_type",
-        default="bert",
-        type=str,
-        # required=True,
-        help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()),
-    )
-    parser.add_argument(
-        "--model_name_or_path",
-        default='bert-base-cased',
-        type=str,
-        # required=True,
-        help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS),
-    )
-    parser.add_argument(
-        "--output_dir",
-        default="./output/",
-        type=str,
-        # required=True,
-        help="The output directory where the model checkpoints and predictions will be written.",
-    )
-
-    # Other parameters
-    parser.add_argument(
-        "--data_dir",
-        default="data",
-        type=str,
-        help="The input data dir. Should contain the .json files for the task."
-             + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
-    )
-    parser.add_argument(
-        "--train_file",
-        default="train.tsv",
-        type=str,
-        help="The input training file. If a data dir is specified, will look for the file there"
-             + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
-    )
-    parser.add_argument(
-        "--predict_file",
-        default="dev.tsv",
-        type=str,
-        help="The input evaluation file. If a data dir is specified, will look for the file there"
-             + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
-    )
-    parser.add_argument(
-        "--test_file",
-        default="test.tsv",
-        type=str,
-        help="The input test file.",
-    )
-    parser.add_argument(
-        "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name"
-    )
-    parser.add_argument(
-        "--tokenizer_name",
-        default="",
-        type=str,
-        help="Pretrained tokenizer name or path if not the same as model_name",
-    )
-    parser.add_argument(
-        "--cache_dir",
-        default="",
-        type=str,
-        help="Where do you want to store the pre-trained models downloaded from s3",
-    )
-    parser.add_argument(
-        "--max_seq_length",
-        default=128,
-        type=int,
-        help="The maximum total input sequence length after WordPiece tokenization. Sequences "
-             "longer than this will be truncated, and sequences shorter than this will be padded.",
-    )
-    parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
-    parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_test", action="store_true", help="Whether to run eval on the test set.")
-    parser.add_argument("--do_infer", action="store_true", help="Whether to run eval on the test set.")
-    parser.add_argument(
-        "--evaluate_during_training", action="store_true", help="Run evaluation during training at each logging step."
-    )
-    parser.add_argument(
-        "--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model."
-    )
-
-    parser.add_argument("--per_gpu_train_batch_size", default=32, type=int, help="Batch size per GPU/CPU for training.")
-    parser.add_argument(
-        "--per_gpu_eval_batch_size", default=32, type=int, help="Batch size per GPU/CPU for evaluation."
-    )
-    parser.add_argument("--learning_rate", default=3e-5, type=float, help="The initial learning rate for Adam.")
-    parser.add_argument("--sch", default='cos', type=str, help="Learning rate schedular.")
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
-    parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument(
-        "--num_train_epochs", default=4.0, type=float, help="Total number of training epochs to perform."
-    )
-    parser.add_argument(
-        "--max_steps",
-        default=-1,
-        type=int,
-        help="If > 0: set total number of training steps to perform. Override num_train_epochs.",
-    )
-    parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
-    parser.add_argument("--logging_steps", type=int, default=500, help="Log every X updates steps.")
-    parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
-    parser.add_argument(
-        "--eval_all_checkpoints",
-        action="store_true",
-        help="Evaluate all checkpoints starting with the same prefix as model_name ending and ending with step number",
-    )
-    parser.add_argument("--no_cuda", action="store_true", help="Whether not to use CUDA when available")
-    parser.add_argument(
-        "--overwrite_output_dir", action="store_true", help="Overwrite the content of the output directory"
-    )
-    parser.add_argument(
-        "--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets"
-    )
-    parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
-
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
-    parser.add_argument(
-        "--fp16",
-        action="store_true",
-        help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
-    )
-    parser.add_argument(
-        "--fp16_opt_level",
-        type=str,
-        default="O1",
-        help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
-             "See details at https://nvidia.github.io/apex/amp.html",
-    )
-    parser.add_argument("--server_ip", type=str, default="", help="Can be used for distant debugging.")
-    parser.add_argument("--server_port", type=str, default="", help="Can be used for distant debugging.")
-    args, _ = parser.parse_known_args()
-    return args
+        write_func(
+            args, output_file_dir=output_eval_file, examples=examples, preds=preds, probs=probs
+        )
 
 
 def main():
@@ -690,6 +544,7 @@ def main():
     parser.add_argument("--do_eval", action="store_true", help="Whether to run eval on the dev set.")
     parser.add_argument("--do_test", action="store_true", help="Whether to run eval on the test set.")
     parser.add_argument("--do_infer", action="store_true", help="Whether to run eval on the test set.")
+    parser.add_argument("--unlabel", action="store_true", help="Whether to return the test example.")
     parser.add_argument(
         "--evaluate_during_training", action="store_true", help="Run evaluation during training at each logging step."
     )
@@ -841,18 +696,18 @@ def main():
         # Create output directory if needed
         if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(args.output_dir)
-
-        logger.info("Saving model checkpoint to %s", args.output_dir)
+        model_save_path = os.path.join(args.output_dir, "model/")
+        logger.info("Saving model checkpoint to %s", model_save_path)
         # Save a trained model, configuration and tokenizer using `save_pretrained()`.
         # They can then be reloaded using `from_pretrained()`
         model_to_save = (
             model.module if hasattr(model, "module") else model
         )  # Take care of distributed/parallel training
-        model_to_save.save_pretrained(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
+        model_to_save.save_pretrained(model_save_path)
+        tokenizer.save_pretrained(model_save_path)
 
         # Good practice: save your training arguments together with the trained model
-        torch.save(args, os.path.join(args.output_dir, "training_args.bin"))
+        torch.save(args, os.path.join(model_save_path, "training_args.bin"))
 
         # Load a trained model and vocabulary that you have fine-tuned
         model = model_class.from_pretrained(args.output_dir)
@@ -933,7 +788,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # print(get_args())
-
-
-
