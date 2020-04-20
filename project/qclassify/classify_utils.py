@@ -30,6 +30,7 @@ class InputFeatures(object):
 class DataProcessor(object):
     def __init__(self, encoding='utf-8'):
         self.encoding = encoding
+        self.label_list = self.get_labels()
 
     def get_labels(self):
         return ["0", "1"]
@@ -52,7 +53,14 @@ class DataProcessor(object):
         file_dir = os.path.join(data_dir, test_file)
         with open(file_dir, "r", encoding=self.encoding) as f:
             for i, line in enumerate(f):
-                example = InputExample(guid=i, text_a=line.strip(), text_b=None, label="0")
+                items = [item.strip() for item in line.split("\t") if item != ""]
+                label = "0"
+                if len(items) == 2:
+                    if items[-1] not in self.label_list:
+                        continue
+                    else:
+                        label = items[-1]
+                example = InputExample(guid=i, text_a=items[0], text_b=None, label=label)
                 examples.append(example)
         return examples
 
@@ -151,8 +159,14 @@ def get_prob(preds):
     return probs
 
 
-
-
-
-
-
+def write_func(args, output_file_dir, examples, preds, probs):
+    fout = open(output_file_dir, "w", encoding="utf-8")
+    if args.unlabel:
+        fout.write("\t".join(["query", "pred_label", "pos_score"]) + "\n")
+        for i, pred in enumerate(preds):
+            fout.write("\t".join([examples[i].text_a, str(pred), str(probs[i][1])])+"\n")
+    else:
+        fout.write("\t".join(["query", "true_label", "pred_label", "pos_score"]) + "\n")
+        for i, pred in enumerate(preds):
+            fout.write("\t".join([examples[i].text_a, examples[i].label, str(pred), str(probs[i][1])])+"\n")
+    fout.close()
