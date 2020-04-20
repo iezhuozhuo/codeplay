@@ -1,6 +1,7 @@
 import os
 import logging
 import math
+from sklearn.metrics import matthews_corrcoef, f1_score
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -8,7 +9,7 @@ logging.basicConfig(
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
-from sklearn.metrics import matthews_corrcoef, f1_score
+
 
 class InputExample(object):
     def __init__(self, guid, text_a, text_b=None, label=None):
@@ -149,10 +150,3 @@ def get_prob(preds):
     for pred in preds:
         probs.append(_compute_softmax(pred))
     return probs
-
-
-
-
-
-
-

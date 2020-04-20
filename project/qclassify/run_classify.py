@@ -681,7 +681,7 @@ def main():
     )
     parser.add_argument(
         "--max_seq_length",
-        default=128,
+        default=64,
         type=int,
         help="The maximum total input sequence length after WordPiece tokenization. Sequences "
              "longer than this will be truncated, and sequences shorter than this will be padded.",
@@ -909,6 +909,7 @@ def main():
             # Reload the model
             global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
             model = model_class.from_pretrained(checkpoint)  # , force_download=True)
+            tokenizer = tokenizer_class.from_pretrained(checkpoint)
             model.to(args.device)
             args.predict_file = args.test_file
             result = evaluate(args, model, tokenizer)
