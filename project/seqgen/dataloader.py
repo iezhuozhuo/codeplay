@@ -136,7 +136,7 @@ class DataLoaders(object):
 def convert_examples_to_features(args, examples, vocab_src, vocab_tgt, with_S=False, with_E=False):
     features = []
     for i, example in enumerate(examples):
-        if i % 10000 == 0:
+        if i % 10000000 == 0:
             print("Have convert {} lines to features".format(i))
         src_seq, tgt_seq = example[0], example[1]
         len_src = len(src_seq) + (1 if with_S else 0) + (1 if with_E else 0)

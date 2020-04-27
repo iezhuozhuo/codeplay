@@ -1,4 +1,5 @@
 from dataloader import Vocab, DataLoaders, convert_examples_to_features
+import numpy as np
 import torch
 import random
 import argparse
@@ -89,7 +90,7 @@ def train(args, model, vocab_src, vocab_tgt, for_train, with_S=False, with_E=Fal
                     print("Dev Batch, acc %.5f" % (dev_acc))
                 if best_dev_acc < dev_acc:
                     best_model_save_path = os.path.join(args.output_dir, "best_model/")
-                    if os.path.exists(best_model_save_path):
+                    if not os.path.exists(best_model_save_path):
                         os.mkdir(best_model_save_path)
                     best_epoch = ep
                     logger.info("Saving model checkpoint to %s", best_model_save_path)
@@ -120,7 +121,7 @@ def evaluate(args, model, vocab_src, vocab_tgt, for_train, with_S=False, with_E=
         with torch.no_grad():
             src_input, tgt_input = batch[0], batch[1]
             _, acc = model(src_input, tgt_input)
-            dev_acc += acc
+            dev_acc += np.sum(acc.cpu().numpy())
     dev_acc = dev_acc / len(eval_dataloader)
     return dev_acc
 
@@ -171,7 +172,7 @@ def main():
     random.seed(19940117)
     torch.manual_seed(19940117)
     args, _ = parse_config()
-    if os.path.exists(args.output_dir):
+    if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
     # Setup CUDA, GPU & distributed training

@@ -99,5 +99,5 @@ class Ranker(nn.Module):
 
         loss = label_smoothed_nll_loss(log_probs, gold, 0.1)
         #F.nll_loss(log_probs, torch.arange(bsz).cuda(), reduction = "elementwise_mean")
-        loss = loss.mean()
+        # loss = loss.mean()
         return loss, acc
