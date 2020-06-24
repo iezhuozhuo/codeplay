@@ -1,3 +1,13 @@
+### preprocessing.py的相关模板，可供参考规范代码
+
+两种方式：
+
+- 使用DataFiledProcessor()类，用的是torchtext封装[目前暂时没有]
+- 使用DataProcessor()类，可以和普通的读入方式一样也可以兼容huggingface的处理（产出example便于生成feature）
+
+DataProcessor类的普通使用方法：
+
+```python
 import os
 import json
 from tqdm import tqdm
@@ -10,21 +20,6 @@ from torchtext.data import Field, TabularDataset
 import source.utils.Constant as constants
 
 
-class DataFildProcessor():
-    def __init__(self, args, ):
-        super(DataFildProcessor, self).__init__()
-        # self.train_data_dir = os.path.join(args.data_dir, args.train_file)
-
-    def get_train_examples(self, data_dir, train_file):
-        pass
-
-    def get_dev_examples(self, data_dir, dev_file):
-        pass
-
-    def get_test_examples(self, data_dir, test_file):
-        pass
-
-
 class DataProcessor():
     def __init__(self, args, use_word=False, max_size=10000, min_freq=1):
         super(DataProcessor, self).__init__()
@@ -33,6 +28,7 @@ class DataProcessor():
         self.vocab = self.get_vocab_dic(max_size=max_size, min_freq=min_freq)
 
     def get_dataset(self, file_path):
+        # 各种读入数据的处理，包括word2id、padding_index
         examples = []
         desc_message = "GETDATA FROM" + file_path.upper()
         with open(file_path, 'r', encoding='UTF-8') as f:
@@ -77,6 +73,7 @@ class DataProcessor():
         return test_dataset
 
     def build_vocab(self, file_path, max_size, min_freq):
+        # 按要求构建vocab
         vocab_dic = {}
         with open(file_path, 'r', encoding='UTF-8') as f:
             for line in tqdm(f, desc="Build_Vocab"):
@@ -93,6 +90,7 @@ class DataProcessor():
         return vocab_dic
 
     def get_tokenizer(self, use_word=False):
+        # 此处定制个人的tokenizer处理器
         if use_word:
             tokenizer = lambda x: x.split(' ')  # 以空格隔开，word-level
         else:
@@ -100,6 +98,7 @@ class DataProcessor():
         return tokenizer
 
     def get_vocab_dic(self, max_size=10000, min_freq=1):
+        # 读vocab或者构建vocab并保存
         if os.path.exists(self.args.vocab_path):
             vocab = json.load(open(self.args.vocab_path, 'r', encoding="utf-8"))
         else:
@@ -109,7 +108,9 @@ class DataProcessor():
                                      )
             json.dump(vocab, open(self.args.vocab_path, 'w', encoding="utf-8"))
         return vocab
+```
 
+HuggingFace数据处理方式：【待更新】
 
-if __name__ == "__main__":
-    pass
+DataFiledProcessor()类处理方式：【待更新】
+

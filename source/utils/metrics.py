@@ -45,6 +45,7 @@ def attn_accuracy(logits, targets):
     acc = trues.mean()
     return acc
 
+
 def perplexity(logits, targets, weight=None, padding_idx=None):
     """
     logits: (batch_size, max_len, vocab_size)
@@ -64,6 +65,7 @@ def perplexity(logits, targets, weight=None, padding_idx=None):
         nll = nll / word_cnt
     ppl = nll.exp()
     return ppl
+
 
 def bleu(hyps, refs):
     """

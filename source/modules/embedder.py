@@ -15,9 +15,7 @@ import numpy as np
 
 
 class Embedder(nn.Embedding):
-    """
-    Generic Embedder
-    """
+    """ Generic Embedder """
     def load_embeddings(self, embeds, scale=0.05):
         """
         load_embeddings

@@ -1,3 +1,18 @@
+## 关于train_utils.py代码的模板，按需修改使用
+
+**可以直接使用有：**
+
+set_seed，checkoutput_and_setcuda，init_logger
+
+**定制的有：**
+
+trainer，evaluation，cal_performance，infer，ModelConfig以及其他应该需要的
+
+### Directly Use
+
+set_seed, checkoutput_and_setcuda, init_logger
+
+```python
 import os
 import random
 import shutil
@@ -10,35 +25,6 @@ import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
 from source.utils.engine import Trainer
-
-
-def textCNNConfig(parser):
-    parser.add_argument('--filter_sizes', type=int, nargs='+', default=[2,3,4])
-    parser.add_argument("--num_filters", type=int, default=256)
-    parser.add_argument(
-        "--label_file",
-        default="class.txt",
-        type=str,
-        help="The input label file.",
-    )
-    parser.add_argument(
-        "--vocab_path",
-        default="./output/vocab.json",
-        type=str,
-        help="The input pretrain embedded file.",
-    )
-    parser.add_argument(
-        "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
-        # default=None,
-        type=str,
-        help="The input pretrain embedded file.",
-    )
-    parser.add_argument("--embedded_size", type=int, default=300)
-    parser.add_argument("--num_classes", type=int, default=10)
-    args, _ = parser.parse_known_args()
-    return args
-
 
 def set_seed(args):
     random.seed(args.seed)
@@ -92,34 +78,22 @@ def init_logger(args):
     )
     return logger
 
+```
 
-def load_pretrain_embed(pretrain_dir, output_dir, word_to_id, emb_dim=300):
-    filename_trimmed_dir = os.path.join(output_dir, "embedding_SougouNews.npz")
+### Costomize
 
-    if os.path.exists(filename_trimmed_dir):
-        embeddings = np.load(filename_trimmed_dir)["embeddings"].astype('float32')
-        return embeddings
+#### trainer
 
-    embeddings = np.random.rand(len(word_to_id), emb_dim)
-    with open(pretrain_dir, "r", encoding='UTF-8') as f:
-        for i, line in enumerate(f.readlines()):
-            lin = line.strip().split(" ")
-            if lin[0] in word_to_id:
-                idx = word_to_id[lin[0]]
-                emb = [float(x) for x in lin[1:301]]
-                embeddings[idx] = np.asarray(emb, dtype='float32')
-        np.savez_compressed(filename_trimmed_dir, embeddings=embeddings)
-    return embeddings
+定制的部分在于换一下数据读入的方式、loss的计算方式、save strategy以及load strategy。
 
+**TODO**：
 
-def cal_performance(preds, labels):
-    assert len(preds) == len(labels)
-    acc = (preds == labels).mean()
-    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
-    mertrics = {"acc": acc, "f1":f1}
-    return mertrics
+- optimizer学习率衰减策略`lr_scheduler`
+- Early stop
+- `save_summary`可视化
+- model`load`函数
 
-
+```python
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
                  num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, save_summary=False):
@@ -163,7 +137,8 @@ class trainer(Trainer):
         tr_loss, nb_tr_examples, nb_tr_steps = 0, 0, 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-
+			
+			# 定义自己的输入格式
             inputs_id, inputs_label, _ = tuple(t.to(self.args.device) for t in batch)
             pred = self.model(inputs_id)
             loss = F.cross_entropy(pred, inputs_label)
@@ -203,7 +178,8 @@ class trainer(Trainer):
                 # logging_loss = tr_loss / self.global_step
                 self.logger.info("the current train_steps is {}".format(self.global_step))
                 self.logger.info("the current logging_loss is {}".format(loss.item()))
-
+			
+            ## TODO：提前终止后续安排
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
                 self.model.to(self.args.device)
@@ -217,6 +193,7 @@ class trainer(Trainer):
                     self.best_valid_metric = cur_valid_metric
                 self.save(is_best)
                 self.logger.info("-" * 85 + "\n")
+
 
     def train(self):
         if self.args.max_steps > 0:
@@ -261,6 +238,7 @@ class trainer(Trainer):
             self.train_epoch()
 
     def save(self, is_best=False, save_mode="best"):
+        ## 可以修改save strategy
         model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
         model_file = os.path.join(
             self.save_dir, model_file_name)
@@ -288,13 +266,23 @@ class trainer(Trainer):
 
     def load(self, file_prefix):
         pass
+```
 
+#### evaluate
 
+定制的部分在于换一下数据读入的方式、`loss`的计算方式、预测值`pred`的收集方式，`metric`计算方式。
+
+**TODO**：
+
+- 统一的`metric`计算方式，目前比较混乱
+
+```python
 def evaluate(args, model, valid_dataset, logger):
     eval_loss, nb_eval_steps = 0.0, 0
     labels, preds = None, None
     model.eval()
     for batch in valid_dataset:
+        ## 数据读入方式以及loss的计算方式
         inputs_id, inputs_label, _ = tuple(t.to(args.device) for t in batch)
         with torch.no_grad():
             logits = model(inputs_id)
@@ -304,14 +292,16 @@ def evaluate(args, model, valid_dataset, logger):
 
             eval_loss += tmp_eval_loss.item()
         nb_eval_steps += 1
-
+		
+        ## 预测值的收集方式
         if preds is None:
             preds = logits.detach().cpu().numpy()
             labels = inputs_label.detach().cpu().numpy()
         else:
             preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
             labels = np.append(labels, inputs_label.detach().cpu().numpy(), axis=0)
-
+	
+    ## 预测值与真实值计算的方式
     eval_loss = eval_loss / nb_eval_steps
     preds = np.argmax(preds, axis=1)
     metrics = cal_performance(preds, labels)
@@ -320,4 +310,39 @@ def evaluate(args, model, valid_dataset, logger):
     for key in sorted(metrics.keys()):
         logger.info("  %s = %s", key.upper(), str(metrics[key]))
     return metrics
+```
+
+#### cal_performance
+
+定制在于引入并计算所需要的`metric`，返回的是字典。
+
+**TODO：**
+
+- 考虑是否需要使用MetricManager类
+
+```python
+def cal_performance(preds, labels):
+    ## 定制所需的metric计算方式以及收集方式
+    assert len(preds) == len(labels)
+    acc = (preds == labels).mean()
+    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
+    mertrics = {"acc": acc, "f1":f1}
+    return mertrics
+```
+
+#### inference
+
+**ongoing.....**
+
+#### ModelConfig
+
+在加载BasicConfig之后，读入改`model`必要的参数
+
+```python
+def ModelConfig(parser):
+    # 添加需要的参数
+    parser.add_argument("--what_you_want", type=int, default=None)
+    args, _ = parser.parse_known_args()
+    return args
+```
 
