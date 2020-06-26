@@ -206,6 +206,7 @@ class TextField(Field):
         """
         build_word_embeddings
         """
+
         if isinstance(embed_file, list):
             embeds = [self.build_word_embeddings(e_file)
                       for e_file in embed_file]
@@ -231,6 +232,24 @@ class TextField(Field):
             rate = cover / len(embeds)
             print("{} words have pretrained {}-D word embeddings (coverage: {:.3f})".format( \
                     cover, dim, rate))
+        '''
+        ## use for sgns.sogou.char. https://github.com/Embedding/Chinese-Word-Vectors
+        filename_trimmed_dir = os.path.join('.//output//', "embedding_pretrain.npz")
+
+        if os.path.exists(filename_trimmed_dir):
+            embeddings = np.load(filename_trimmed_dir)["embeddings"].astype('float32')
+            return embeddings
+
+        embeddings = np.random.rand(len(self.stoi), 300)
+        with open(embed_file, "r", encoding='UTF-8') as f:
+            for i, line in enumerate(f.readlines()):
+                lin = line.strip().split(" ")
+                if lin[0] in self.stoi:
+                    idx = self.stoi[lin[0]]
+                    emb = [float(x) for x in lin[1:301]]
+                    embeddings[idx] = np.asarray(emb, dtype='float32')
+            np.savez_compressed(filename_trimmed_dir, embeddings=embeddings)
+        '''
         return embeds
 
     def dump_vocab(self):
