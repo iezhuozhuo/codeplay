@@ -245,7 +245,10 @@ class trainer(Trainer):
         train_state = {"epoch": self.epoch,
                        "batch_num": self.batch_num,
                        "best_valid_metric": self.best_valid_metric,
+                       "optimizer": self.optimizer.state_dict(),
                        "settings": self.args}
+        if self.lr_scheduler is not None:
+            train_state["lr_scheduler"] = self.lr_scheduler.state_dict()
         torch.save(train_state, train_file)
         self.logger.info("Saved train state to '{}'".format(train_file))
 
@@ -258,8 +261,23 @@ class trainer(Trainer):
                 "Saved best model state to '{}' with new best valid metric {}-{:.3f}".format(
                     best_model_file, self.valid_metric_name.upper(), self.best_valid_metric))
 
-    def load(self, file_prefix):
-        pass
+    def load(self, model_file, train_file):
+        model_state_dict = torch.load(
+            model_file, map_location=lambda storage, loc: storage)
+        self.model.load_state_dict(model_state_dict)
+        self.logger.info("Loaded model state from '{}'".format(model_file))
+
+        train_state_dict = torch.load(
+            train_file, map_location=lambda storage, loc: storage)
+        self.epoch = train_state_dict["epoch"]
+        self.best_valid_metric = train_state_dict["best_valid_metric"]
+        self.batch_num = train_state_dict["batch_num"]
+        self.optimizer.load_state_dict(train_state_dict["optimizer"])
+        if self.lr_scheduler is not None and "lr_scheduler" in train_state_dict:
+            self.lr_scheduler.load_state_dict(train_state_dict["lr_scheduler"])
+        self.logger.info(
+            "Loaded train state from '{}' with (epoch-{} best_valid_metric-{:.3f})".format(
+                train_file, self.epoch, self.best_valid_metric))
 
 
 def evaluate(args, model, valid_dataset, logger):

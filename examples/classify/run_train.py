@@ -3,11 +3,9 @@ import random
 import numpy as np
 
 import torch
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
-from torch.utils.data.distributed import DistributedSampler
 
-from preprocessing import DataProcessor
-from train_utils import set_seed, checkoutput_and_setcuda, init_logger, trainer, load_pretrain_embed
+from preprocessing import DataProcessor, ClassifierCorpus
+from train_utils import set_seed, checkoutput_and_setcuda, init_logger, trainer, load_pretrain_embed, evaluate
 from ModelConfig import (
             TextCNNConfig,
             TextRNNConfig,
@@ -44,35 +42,32 @@ def main():
     # Set seed
     set_seed(args)
 
-    processor = DataProcessor(args)
-    padding_idx = processor.vocab[constants.PAD_WORD]
+    specials = [constants.UNK_WORD, constants.PAD_WORD]
+    processor = ClassifierCorpus(args=args, specials=specials)
+    padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
     embedded_pretrain = None
     if args.embed_file:
-        embedded_pretrain = load_pretrain_embed(args.embed_file, args.output_dir, processor.vocab, args.embedded_size)
+        embedded_pretrain = load_pretrain_embed(args.embed_file, args.output_dir, processor.field["text"].stoi, args.embedded_size)
 
     logger.info(args)
 
     model = model_class(args=args,
                         embedded_pretrain=embedded_pretrain,
-                        n_vocab=len(processor.vocab),
+                        n_vocab=processor.field["text"].vocab_size,
                         padding_idx=padding_idx)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
     # Training
     if args.do_train:
-        train_dataset = processor.get_train_features()
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-        train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-        train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+        train_dataloader = processor.create_batch(data_type="train")
 
-        valid_dataloader = processor.get_dev_features()
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-        eval_sampler = SequentialSampler(valid_dataloader)
-        eval_dataloader = DataLoader(valid_dataloader, sampler=eval_sampler, batch_size=args.eval_batch_size)
+        eval_dataloader = processor.create_batch(data_type="valid")
 
         args.logging_steps = len(train_dataloader) // args.gradient_accumulation_steps // 5
         args.valid_steps = len(train_dataloader)
-
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
         trainer_op = trainer(args=args,
                              model=model,
@@ -89,7 +84,26 @@ def main():
 
     # Test
     if args.do_test:
-        pass
+        args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
+        test_dataloader = processor.create_batch(data_type="test")
+
+        trainer_op = trainer(args=args,
+                             model=model,
+                             optimizer=optimizer,
+                             train_iter=None,
+                             valid_iter=None,
+                             logger=logger,
+                             num_epochs=args.num_train_epochs,
+                             save_dir=args.output_dir,
+                             log_steps=None,
+                             valid_steps=None,
+                             valid_metric_name="+acc")
+
+        best_model_file = os.path.join(args.output_dir, "best.model")
+        best_train_file = os.path.join(args.output_dir, "best.train")
+        trainer_op.load(best_model_file, best_train_file)
+
+        evaluate(args, trainer_op.model, test_dataloader, logger)
 
     # TODO: Infer case study
     if args.do_infer:

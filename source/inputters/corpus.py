@@ -24,8 +24,8 @@ class Corpus(object):
     Corpus
     """
     def __init__(self,
-                 data_dir,
-                 data_prefix,
+                 data_dir=None,
+                 data_prefix=None,
                  min_freq=0,
                  max_vocab_size=None):
         self.data_dir = data_dir
