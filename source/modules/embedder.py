@@ -1,17 +1,9 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
-"""
-File: source/encoders/embedder.py
-"""
+# coding: utf-8
+
+import numpy as np
 
 import torch
 import torch.nn as nn
-import numpy as np
 
 
 class Embedder(nn.Embedding):
@@ -44,7 +36,7 @@ class PositionalEncoding(nn.Module):
 
     def _get_sinusoid_encoding_table(self, n_position, d_hid):
         ''' Sinusoid position encoding table '''
-        # TODO: make it with torch instead of numpy
+        # Tod: make it with torch instead of numpy
 
         def get_position_angle_vec(position):
             return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]

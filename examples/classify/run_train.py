@@ -7,14 +7,28 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 
 from preprocessing import DataProcessor
-from train_utils import textCNNConfig, set_seed, checkoutput_and_setcuda, init_logger, trainer, load_pretrain_embed
+from train_utils import set_seed, checkoutput_and_setcuda, init_logger, trainer, load_pretrain_embed
+from ModelConfig import (
+            TextCNNConfig,
+            TextRNNConfig,
+            DPCNNConfig,
+            TransformerClassifierConfig,
+            FastTextConfig,
+            TextRNNModel,
+            TextCNNModel,
+            DPCNNModel,
+            TransformerClassifierModel,
+            FastTextModel)
 
-from source.models.TextCNN import TextCNN
 from source.utils.engine import BasicConfig
 import source.utils.Constant as constants
 
 MODEL_CLASSES = {
-    "textcnn": (TextCNN, textCNNConfig),
+    "textcnn": (TextCNNModel, TextCNNConfig),
+    "textrnn": (TextRNNModel, TextRNNConfig),
+    "dpcnn": (DPCNNModel, DPCNNConfig),
+    "transformer": (TransformerClassifierModel, TransformerClassifierConfig),
+    "fasttext": (FastTextModel, FastTextConfig)
 }
 
 
@@ -36,16 +50,13 @@ def main():
     if args.embed_file:
         embedded_pretrain = load_pretrain_embed(args.embed_file, args.output_dir, processor.vocab, args.embedded_size)
 
-    model = model_class(num_filters=args.num_filters,
-                        embedded_size=args.embedded_size,
-                        dropout=0.5,
-                        num_classes=args.num_classes,
-                        n_vocab=len(processor.vocab),
-                        filter_sizes=args.filter_sizes,
+    logger.info(args)
+
+    model = model_class(args=args,
                         embedded_pretrain=embedded_pretrain,
+                        n_vocab=len(processor.vocab),
                         padding_idx=padding_idx)
 
-    logger.info(args)
     # Training
     if args.do_train:
         train_dataset = processor.get_train_features()
@@ -80,7 +91,7 @@ def main():
     if args.do_test:
         pass
 
-    # Infer case study
+    # TODO: Infer case study
     if args.do_infer:
         pass
 

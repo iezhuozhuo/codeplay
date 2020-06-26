@@ -34,6 +34,10 @@ class DataProcessor():
 
     def get_dataset(self, file_path):
         examples = []
+        buckets = None
+        n_gram = ()
+        if hasattr(self.args, "n_gram_vocab"):
+            buckets = self.args.n_gram_vocab
         desc_message = "GETDATA FROM" + file_path.upper()
         with open(file_path, 'r', encoding='UTF-8') as f:
             for line in tqdm(f, desc=desc_message):
@@ -53,13 +57,27 @@ class DataProcessor():
                 # word to id
                 for word in token:
                     words_line.append(self.vocab.get(word, self.vocab.get(constants.UNK_WORD)))
-                examples.append((words_line, int(label), seq_len)) # [([...], 0), ([...], 1), ...]
-        # examples = examples[0:1024]
+
+                # fasttext
+                if buckets:
+                    bigram = []
+                    trigram = []
+                    for i in range(self.args.max_seq_length):
+                        bigram.append(self.biGramHash(words_line, i, buckets))
+                        trigram.append(self.triGramHash(words_line, i, buckets))
+                    n_gram = (bigram, trigram)
+                examples.append((words_line, int(label), seq_len,) + n_gram) # [([...], 0), ([...], 1), ...]
+        # TODO example nums check
+        examples = examples[0:1024]
         all_inputs_id = torch.tensor([f[0] for f in examples], dtype=torch.long)
         all_inputs_label = torch.tensor([f[1] for f in examples], dtype=torch.long)
         all_inputs_len = torch.tensor([f[2] for f in examples], dtype=torch.long)
-        dataset = TensorDataset(all_inputs_id, all_inputs_label, all_inputs_len)
-        return dataset
+        if buckets:
+            all_inputs_bigram = torch.tensor([f[3] for f in examples], dtype=torch.long)
+            all_inputs_trigram = torch.tensor([f[4] for f in examples], dtype=torch.long)
+            return TensorDataset(all_inputs_id, all_inputs_label, all_inputs_len, all_inputs_bigram, all_inputs_trigram)
+
+        return TensorDataset(all_inputs_id, all_inputs_label, all_inputs_len)
 
     def get_train_features(self):
         train_file_path = os.path.join(self.args.data_dir, self.args.train_file)
@@ -98,6 +116,15 @@ class DataProcessor():
         else:
             tokenizer = lambda x: [y for y in x]  # char-level
         return tokenizer
+
+    def biGramHash(self, sequence, t, buckets):
+        t1 = sequence[t - 1] if t - 1 >= 0 else 0
+        return (t1 * 14918087) % buckets
+
+    def triGramHash(self, sequence, t, buckets):
+        t1 = sequence[t - 1] if t - 1 >= 0 else 0
+        t2 = sequence[t - 2] if t - 2 >= 0 else 0
+        return (t2 * 14918087 * 18408749 + t1 * 14918087) % buckets
 
     def get_vocab_dic(self, max_size=10000, min_freq=1):
         if os.path.exists(self.args.vocab_path):

@@ -1,6 +1,11 @@
+# coding: utf-8
+
+import math
+import numpy as np
+
 import torch
 import torch.nn as nn
-import numpy as np
+
 from source.modules.embedder import PositionalEncoding
 from source.modules.attention import MultiHeadAttention, PositionwiseFeedForward
 

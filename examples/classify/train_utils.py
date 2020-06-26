@@ -12,34 +12,6 @@ from tensorboardX import SummaryWriter
 from source.utils.engine import Trainer
 
 
-def textCNNConfig(parser):
-    parser.add_argument('--filter_sizes', type=int, nargs='+', default=[2,3,4])
-    parser.add_argument("--num_filters", type=int, default=256)
-    parser.add_argument(
-        "--label_file",
-        default="class.txt",
-        type=str,
-        help="The input label file.",
-    )
-    parser.add_argument(
-        "--vocab_path",
-        default="./output/vocab.json",
-        type=str,
-        help="The input pretrain embedded file.",
-    )
-    parser.add_argument(
-        "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
-        # default=None,
-        type=str,
-        help="The input pretrain embedded file.",
-    )
-    parser.add_argument("--embedded_size", type=int, default=300)
-    parser.add_argument("--num_classes", type=int, default=10)
-    args, _ = parser.parse_known_args()
-    return args
-
-
 def set_seed(args):
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -164,8 +136,8 @@ class trainer(Trainer):
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
 
-            inputs_id, inputs_label, _ = tuple(t.to(self.args.device) for t in batch)
-            pred = self.model(inputs_id)
+            inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(self.args.device) for t in batch)
+            pred = self.model((inputs_id, inputs_len,) + tuple(_))
             loss = F.cross_entropy(pred, inputs_label)
 
             if self.args.n_gpu > 1:
@@ -295,9 +267,9 @@ def evaluate(args, model, valid_dataset, logger):
     labels, preds = None, None
     model.eval()
     for batch in valid_dataset:
-        inputs_id, inputs_label, _ = tuple(t.to(args.device) for t in batch)
+        inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(args.device) for t in batch)
         with torch.no_grad():
-            logits = model(inputs_id)
+            logits = model((inputs_id, inputs_len,) + tuple(_))
             tmp_eval_loss = F.cross_entropy(logits, inputs_label)
             if args.n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
