@@ -70,7 +70,7 @@ def BasicConfig():
     )
     parser.add_argument(
         "--data_dir",
-        default="../../../debug/THUCNews/",
+        default=None,
         type=str,
         help="The input data dir. Should contain the .json files for the task."
              + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",

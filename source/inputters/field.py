@@ -87,10 +87,14 @@ class NumberField(Field):
     NumberField
     """
     def __init__(self,
+                 label_list=None,
                  sequential=False,
                  dtype=None):
         super(NumberField, self).__init__(sequential=sequential,
                                           dtype=dtype)
+        self.label_list = label_list
+        self.id2label = {i: label for i, label in enumerate(label_list)} if label_list else None
+        self.label2id = {label: i for i, label in enumerate(label_list)} if label_list else None
 
     def str2num(self, string):
         """
@@ -99,7 +103,7 @@ class NumberField(Field):
         if self.sequential:
             return [self.dtype(s) for s in string.split(" ")]
         else:
-            return self.dtype(string)
+            return self.label2id[string] if self.label2id else self.dtype(string)
 
     def num2str(self, number):
         """
@@ -108,7 +112,12 @@ class NumberField(Field):
         if self.sequential:
             return " ".join([str(x) for x in number])
         else:
-            return str(number)
+            return self.id2label[number] if self.label2id else str(number)
+
+    def load(self, field):
+        self.label_list = field["label_list"]
+        self.id2label = field["id2label"]
+        self.label2id = field["label2id"]
 
 
 # class TextField(Field):
