@@ -298,4 +298,4 @@ class ClassifierCorpus(object):
 
 
 if __name__ == "__main__":
-    pass
+    print("well done")
