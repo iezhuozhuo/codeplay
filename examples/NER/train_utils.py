@@ -3,12 +3,14 @@ import random
 import shutil
 import logging
 import numpy as np
+from collections import Counter
 from seqeval.metrics import accuracy_score
 from seqeval.metrics import classification_report
 from seqeval.metrics import f1_score
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data.dataset import TensorDataset
 from tensorboardX import SummaryWriter
 
 from source.utils.engine import Trainer
@@ -135,12 +137,21 @@ class trainer(Trainer):
         train_start_message = "Training Epoch - {}".format(self.epoch)
         self.logger.info(train_start_message)
 
-        tr_loss, nb_tr_examples, nb_tr_steps = 0, 0, 0
+        tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
+            if hasattr(self.args, "bert"):
+                batch = tuple(t.to(self.args.device) for t in batch)
+                inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
+                if self.args.model_type != "distilbert":
+                    # XLM and RoBERTa don't use segment_ids
+                    inputs["token_type_ids"] = (batch[2] if self.args.model_type in ["bert", "xlnet"] else None)
+                outputs = self.model(**inputs)
+            else:
+                inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(self.args.device) for t in batch)
+                outputs = self.model(inputs=(inputs_id, inputs_len) + tuple(_), labels=inputs_label)
+                # outputs = self.model(inputs=inputs_id, labels=inputs_label)
 
-            inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(self.args.device) for t in batch)
-            outputs = self.model(inputs=(inputs_id, inputs_len) + tuple(_), labels=inputs_label)
             loss = outputs[0]
 
             if self.args.n_gpu > 1:
@@ -164,12 +175,10 @@ class trainer(Trainer):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
 
             tr_loss += loss.item()
-            nb_tr_examples += inputs_id.size(0)
-            nb_tr_steps += 1
 
             if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
                 self.optimizer.step()
-                if self.lr_scheduler:
+                if self.lr_scheduler is not None:
                     self.lr_scheduler.step()  # Update learning rate schedule
                 self.model.zero_grad()
                 self.global_step += 1
@@ -182,7 +191,10 @@ class trainer(Trainer):
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
                 self.model.to(self.args.device)
-                metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
+                if hasattr(self.args, "bert"):
+                    metrics = evaluate_bert(self.args, self.model, self.valid_iter, self.logger)
+                else:
+                    metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
                 cur_valid_metric = metrics[self.valid_metric_name]
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric
@@ -215,6 +227,7 @@ class trainer(Trainer):
         self.logger.info("logger steps = %d", self.log_steps)
         self.logger.info("valid steps = %d", self.valid_steps)
         self.logger.info("-" * 85 + "\n")
+
         if self.args.fp16:
             try:
                 from apex import amp
@@ -275,7 +288,8 @@ class trainer(Trainer):
         self.epoch = train_state_dict["epoch"]
         self.best_valid_metric = train_state_dict["best_valid_metric"]
         self.batch_num = train_state_dict["batch_num"]
-        self.optimizer.load_state_dict(train_state_dict["optimizer"])
+        if self.optimizer is not None and "optimizer" in train_state_dict:
+            self.optimizer.load_state_dict(train_state_dict["optimizer"])
         if self.lr_scheduler is not None and "lr_scheduler" in train_state_dict:
             self.lr_scheduler.load_state_dict(train_state_dict["lr_scheduler"])
         self.logger.info(
@@ -291,8 +305,12 @@ def evaluate(args, model, valid_dataset, logger):
         inputs_id, inputs_label, inputs_len = tuple(t.to(args.device) for t in batch)
         with torch.no_grad():
             tmp_eval_loss, logits = model(inputs=(inputs_id, inputs_len), labels=inputs_label)
-            # TODO args.id2label
-            tags, _ = model.crf._obtain_labels(logits, args.id2label, inputs_len)
+
+            if getattr(args, "optimized"):
+                pred = model.crf.decode(logits)
+                tags = pred.squeeze(0).cpu().numpy().tolist()
+            else:
+                tags, _ = model.crf._obtain_labels(logits, args.id2label, inputs_len)
 
             if args.n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
@@ -312,11 +330,254 @@ def evaluate(args, model, valid_dataset, logger):
                     break
                 else:
                     temp_1.append(args.id2label[out_label_ids[i][j]])
-                    temp_2.append(tags[i][j])
+                    if hasattr(args, "optimized"):
+                        temp_2.append(args.id2label[tags[i][j]])
+                    else:
+                        temp_2.append(tags[i][j])
 
+    # # 其他评估
+    # metrics = Metrics(labels, preds)
+    # metrics.report_scores()
+    # # metrics.report_confusion_matrix()
+    # results = {"f1": metrics.avg_metrics['f1_score'], "acc": metrics.precision_scores}
+    # results.update({"loss": eval_loss})
+    # return results
+
+    # seqeval评估
     metrics = cal_performance(preds, labels)
     metrics.update({"loss": eval_loss})
-
     for key in sorted(metrics.keys()):
         logger.info("  %s = %s", key.upper(), str(metrics[key]))
     return metrics
+
+
+def evaluate_bert(args, model, valid_dataset, logger):
+    eval_loss = 0.0
+    nb_eval_steps = 0
+    labels, preds = [], []
+    for step, batch in enumerate(valid_dataset):
+        model.eval()
+        batch = tuple(t.to(args.device) for t in batch)
+        with torch.no_grad():
+            inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
+            if args.model_type != "distilbert":
+                # XLM and RoBERTa don"t use segment_ids
+                inputs["token_type_ids"] = (batch[2] if args.model_type in ["bert", "xlnet"] else None)
+            outputs = model(**inputs)
+        tmp_eval_loss, logits = outputs[:2]
+        if args.n_gpu > 1:
+            tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
+        eval_loss += tmp_eval_loss.item()
+        nb_eval_steps += 1
+        if "crf" in args.model_type:
+            logger.info("Using CRF Evaluation")
+            tags = model.crf.decode(logits, inputs['attention_mask'])
+            pred = tags.squeeze(0).cpu().numpy().tolist()
+        else:
+            pred = np.argmax(logits.cpu().numpy(), axis=2).tolist()
+        out_label_ids = inputs['labels'].cpu().numpy().tolist()
+        for i, label in enumerate(out_label_ids):
+            temp_1, temp_2 = [], []
+            for j, m in enumerate(label):
+                if j == 0:
+                    continue
+                elif out_label_ids[i][j] == args.label2id[constants.SEP]:
+                    labels.append(temp_1)
+                    preds.append(temp_2)
+                    break
+                else:
+                    temp_1.append(args.id2label[out_label_ids[i][j]])
+                    temp_2.append(args.id2label[pred[i][j]])
+
+    # 其他评估
+    metrics = Metrics(labels, preds)
+    metrics.report_scores()
+    # metrics.report_confusion_matrix()
+    results = {"f1": metrics.avg_metrics['f1_score'], "acc": metrics.precision_scores}
+    results.update({"loss": eval_loss})
+    return results
+
+    # seqeval评估
+    # metrics = cal_performance(preds, labels)
+    # metrics.update({"loss": eval_loss})
+    # for key in sorted(metrics.keys()):
+    #     logger.info("  %s = %s", key.upper(), str(metrics[key]))
+    # return metrics
+
+
+def flatten_lists(lists):
+    flatten_list = []
+    for l in lists:
+        if type(l) == list:
+            flatten_list += l
+        else:
+            flatten_list.append(l)
+    return flatten_list
+
+
+class Metrics(object):
+    """用于评价模型，计算每个标签的精确率，召回率，F1分数"""
+
+    def __init__(self, golden_tags, predict_tags, remove_O=False):
+
+        # [[t1, t2], [t3, t4]...] --> [t1, t2, t3, t4...]
+        self.golden_tags = flatten_lists(golden_tags)
+        self.predict_tags = flatten_lists(predict_tags)
+
+        if remove_O:  # 将O标记移除，只关心实体标记
+            self._remove_Otags()
+
+        # 辅助计算的变量
+        self.tagset = set(self.golden_tags)
+        self.correct_tags_number = self.count_correct_tags()
+        self.predict_tags_counter = Counter(self.predict_tags)
+        self.golden_tags_counter = Counter(self.golden_tags)
+
+        # 计算精确率
+        self.precision_scores = self.cal_precision()
+
+        # 计算召回率
+        self.recall_scores = self.cal_recall()
+
+        # 计算F1分数
+        self.f1_scores = self.cal_f1()
+
+    def cal_precision(self):
+
+        precision_scores = {}
+        for tag in self.tagset:
+            if not self.correct_tags_number.get(tag, 0):
+                precision_scores[tag] = 0.0
+            else:
+                precision_scores[tag] = self.correct_tags_number.get(tag, 0) / self.predict_tags_counter[tag]
+
+        return precision_scores
+
+    def cal_recall(self):
+
+        recall_scores = {}
+        for tag in self.tagset:
+            recall_scores[tag] = self.correct_tags_number.get(tag, 0) / \
+                self.golden_tags_counter[tag]
+        return recall_scores
+
+    def cal_f1(self):
+        f1_scores = {}
+        for tag in self.tagset:
+            p, r = self.precision_scores[tag], self.recall_scores[tag]
+            f1_scores[tag] = 2*p*r / (p+r+1e-10)  # 加上一个特别小的数，防止分母为0
+        return f1_scores
+
+    def report_scores(self):
+        """将结果用表格的形式打印出来，像这个样子：
+                      precision    recall  f1-score   support
+              B-LOC      0.775     0.757     0.766      1084
+              I-LOC      0.601     0.631     0.616       325
+             B-MISC      0.698     0.499     0.582       339
+             I-MISC      0.644     0.567     0.603       557
+              B-ORG      0.795     0.801     0.798      1400
+              I-ORG      0.831     0.773     0.801      1104
+              B-PER      0.812     0.876     0.843       735
+              I-PER      0.873     0.931     0.901       634
+          avg/total      0.779     0.764     0.770      6178
+        """
+        # 打印表头
+        header_format = '{:>9s}  {:>9} {:>9} {:>9} {:>9}'
+        header = ['precision', 'recall', 'f1-score', 'support']
+        print(header_format.format('', *header))
+
+        row_format = '{:>9s}  {:>9.4f} {:>9.4f} {:>9.4f} {:>9}'
+        # 打印每个标签的 精确率、召回率、f1分数
+        for tag in self.tagset:
+            print(row_format.format(
+                tag,
+                self.precision_scores[tag],
+                self.recall_scores[tag],
+                self.f1_scores[tag],
+                self.golden_tags_counter[tag]
+            ))
+
+        # 计算并打印平均值
+        self.avg_metrics = self._cal_weighted_average()
+        print(row_format.format(
+            'avg/total',
+            self.avg_metrics['precision'],
+            self.avg_metrics['recall'],
+            self.avg_metrics['f1_score'],
+            len(self.golden_tags)
+        ))
+
+    def count_correct_tags(self):
+        """计算每种标签预测正确的个数(对应精确率、召回率计算公式上的tp)，用于后面精确率以及召回率的计算"""
+        correct_dict = {}
+        for gold_tag, predict_tag in zip(self.golden_tags, self.predict_tags):
+            if gold_tag == predict_tag:
+                if gold_tag not in correct_dict:
+                    correct_dict[gold_tag] = 1
+                else:
+                    correct_dict[gold_tag] += 1
+
+        return correct_dict
+
+    def _cal_weighted_average(self):
+
+        weighted_average = {}
+        total = len(self.golden_tags)
+
+        # 计算weighted precisions:
+        weighted_average['precision'] = 0.
+        weighted_average['recall'] = 0.
+        weighted_average['f1_score'] = 0.
+        for tag in self.tagset:
+            size = self.golden_tags_counter[tag]
+            weighted_average['precision'] += self.precision_scores[tag] * size
+            weighted_average['recall'] += self.recall_scores[tag] * size
+            weighted_average['f1_score'] += self.f1_scores[tag] * size
+
+        for metric in weighted_average.keys():
+            weighted_average[metric] /= total
+
+        return weighted_average
+
+    def _remove_Otags(self):
+
+        length = len(self.golden_tags)
+        O_tag_indices = [i for i in range(length)
+                         if self.golden_tags[i] == 'O']
+
+        self.golden_tags = [tag for i, tag in enumerate(self.golden_tags)
+                            if i not in O_tag_indices]
+
+        self.predict_tags = [tag for i, tag in enumerate(self.predict_tags)
+                             if i not in O_tag_indices]
+        print("原总标记数为{}，移除了{}个O标记，占比{:.2f}%".format(
+            length,
+            len(O_tag_indices),
+            len(O_tag_indices) / length * 100
+        ))
+
+    def report_confusion_matrix(self):
+        """计算混淆矩阵"""
+
+        print("\nConfusion Matrix:")
+        tag_list = list(self.tagset)
+        # 初始化混淆矩阵 matrix[i][j]表示第i个tag被模型预测成第j个tag的次数
+        tags_size = len(tag_list)
+        matrix = []
+        for i in range(tags_size):
+            matrix.append([0] * tags_size)
+
+        # 遍历tags列表
+        for golden_tag, predict_tag in zip(self.golden_tags, self.predict_tags):
+            try:
+                row = tag_list.index(golden_tag)
+                col = tag_list.index(predict_tag)
+                matrix[row][col] += 1
+            except ValueError:  # 有极少数标记没有出现在golden_tags，但出现在predict_tags，跳过这些标记
+                continue
+
+        # 输出矩阵
+        row_format_ = '{:>7} ' * (tags_size+1)
+        print(row_format_.format("", *tag_list))
+        for i, row in enumerate(matrix):
+            print(row_format_.format(tag_list[i], *row))

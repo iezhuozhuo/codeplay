@@ -71,7 +71,7 @@ def main():
                              save_dir=args.output_dir,
                              log_steps=args.logging_steps,
                              valid_steps=args.valid_steps,
-                             valid_metric_name="+acc")
+                             valid_metric_name="+f1")
         trainer_op.train()
 
     # Test
@@ -89,7 +89,7 @@ def main():
                              save_dir=args.output_dir,
                              log_steps=None,
                              valid_steps=None,
-                             valid_metric_name="+acc")
+                             valid_metric_name="+f1")
 
         best_model_file = os.path.join(args.output_dir, "best.model")
         best_train_file = os.path.join(args.output_dir, "best.train")

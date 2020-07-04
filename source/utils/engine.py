@@ -126,6 +126,8 @@ def BasicConfig():
 
     # learning rate and grad
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
+    parser.add_argument("--warmup_proportion", default=0.1, type=float,
+                        help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1 = 10% of training.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=None, type=float, help="Max gradient norm.")
     parser.add_argument("--sch", default='cos', type=str, help="Learning rate schedular.")
@@ -170,6 +172,7 @@ def BasicConfig():
         type=int,
         help="If > 0: set total number of training steps to perform. Override num_train_epochs.",
     )
+    parser.add_argument("--do_lower_case", action="store_true", help="Whether to run lower case.")
 
     # fp16 manager
     parser.add_argument(

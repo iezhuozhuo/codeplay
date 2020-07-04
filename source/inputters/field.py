@@ -347,6 +347,9 @@ class TextField(Field):
         for tok in self.specials:
             del counter[tok]
 
+        # 保证 pad_index=0, unk_idx=1
+        self.itos.extend(self.specials)
+
         if max_size is not None:
             max_size = max_size + len(self.specials)
 
@@ -363,7 +366,7 @@ class TextField(Field):
         cover = cover / sum(freq for _, freq in words_and_frequencies)
         print(
             "Built vocabulary of size {} (coverage: {:.3f})".format(len(self.itos), cover))
-        self.itos.extend(self.specials)
+
         self.stoi = {tok: i for i, tok in enumerate(self.itos)}
         self.vocab_size = len(self.itos)
 
