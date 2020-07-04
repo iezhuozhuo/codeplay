@@ -1,9 +1,15 @@
 #### BiRNNCRF
 
-##### CMD
+##### CMD v1
 
 ```sh
 python run_train.py --model_type rnncrf --data_dir ./data/cner --max_seq_length 85 --do_train --overwrite_output_dir --per_gpu_train_batch_size 64 --per_gpu_eval_batch_size 64 --learning_rate 1e-3 --num_train_epochs 30
+```
+
+CMD v2
+
+```sh
+python run_train.py --model_type rnncrf --data_dir ./data/cner --max_seq_length 85 --do_train --overwrite_output_dir --per_gpu_train_batch_size 64 --per_gpu_eval_batch_size 64 --learning_rate 1e-3 --num_train_epochs 30 --optimized
 ```
 
 #### BertSoftMax
