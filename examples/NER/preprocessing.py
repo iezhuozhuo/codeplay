@@ -69,10 +69,10 @@ class CNERCorpus(object):
 
         print("Saved text field to '{}'".format(self.field_text_file))
         field_text = {"itos": self.field["text"].itos,
-                 "stoi": self.field["text"].stoi,
-                 "vocab_size": self.field["text"].vocab_size,
-                 "specials": self.field["text"].specials
-                 }
+                      "stoi": self.field["text"].stoi,
+                      "vocab_size": self.field["text"].vocab_size,
+                      "specials": self.field["text"].specials
+                      }
         torch.save(field_text, self.field_text_file)
 
         print("Saved label field to '{}'".format(self.field_label_file))
@@ -210,10 +210,11 @@ class CNERCorpus(object):
 
 # This is for Bert-style Dataloader
 class InputExample(object):
-    def __init__(self, guid, text_a, labels):
+    def __init__(self, guid, text_a, labels=None, subject=None):
         self.guid = guid
         self.text_a = text_a
         self.labels = labels
+        self.subject = subject
 
     def __repr__(self):
         return str(self.to_json_string())
@@ -230,12 +231,20 @@ class InputExample(object):
 
 class InputFeatures(object):
     """A single set of features of data."""
-    def __init__(self, input_ids, input_mask, input_len,segment_ids, label_ids):
+
+    def __init__(self, input_ids, input_mask, input_len, segment_ids,
+                 label_ids=None, start_ids=None, end_ids=None, subjects=None):
+        # normal softmax or ner
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_ids = label_ids
         self.input_len = input_len
+
+        # span
+        self.start_ids = start_ids
+        self.end_ids = end_ids
+        self.subjects = subjects
 
     def __repr__(self):
         return str(self.to_json_string())
@@ -248,62 +257,6 @@ class InputFeatures(object):
     def to_json_string(self):
         """Serializes this instance to a JSON string."""
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
-
-
-class CnerProcessor(DataProcessor):
-    """Processor for the chinese ner data set."""
-    # TODO 读入格式
-    def get_train_examples(self, data_dir):
-        """See base class."""
-        return self._create_examples(self._read_text(os.path.join(data_dir, "train.txt")), "train")
-
-    def get_dev_examples(self, data_dir):
-        """See base class."""
-        return self._create_examples(self._read_text(os.path.join(data_dir, "dev.txt")), "dev")
-
-    def get_test_examples(self, data_dir):
-        """See base class."""
-        return self._create_examples(self._read_text(os.path.join(data_dir, "test.txt")), "test")
-
-    def get_labels(self):
-        """See base class."""
-        return ["X",'B-CONT','B-EDU','B-LOC','B-NAME','B-ORG','B-PRO','B-RACE','B-TITLE',
-                'I-CONT','I-EDU','I-LOC','I-NAME','I-ORG','I-PRO','I-RACE','I-TITLE',
-                'O','S-NAME','S-ORG','S-RACE',constants.CLS, constants.SEP]
-
-    def _create_examples(self, lines, set_type):
-        """Creates examples for the training and dev sets."""
-        examples = []
-        for (i, line) in enumerate(lines):
-            if i == 0:
-                continue
-            guid = "%s-%s" % (set_type, i)
-            text_a = line['words']
-            # BIOS
-            labels = []
-            for x in line['labels']:
-                if 'M-' in x:
-                    labels.append(x.replace('M-','I-'))
-                elif 'E-' in x:
-                    labels.append(x.replace('E-', 'I-'))
-                else:
-                    labels.append(x)
-            examples.append(InputExample(guid=guid, text_a=text_a, labels=labels))
-        return examples
-
-
-def collate_fn(batch):
-    """
-    batch should be a list of (sequence, target, length) tuples...
-    Returns a padded tensor of sequences sorted from longest to shortest,
-    """
-    all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels = map(torch.stack, zip(*batch))
-    max_len = max(all_lens).item()
-    all_input_ids = all_input_ids[:, :max_len]
-    all_attention_mask = all_attention_mask[:, :max_len]
-    all_token_type_ids = all_token_type_ids[:, :max_len]
-    all_labels = all_labels[:, :max_len]
-    return all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_lens
 
 
 class CNerTokenizer(BertTokenizer):
@@ -323,12 +276,238 @@ class CNerTokenizer(BertTokenizer):
             else:
                 _tokens.append('[UNK]')
         return _tokens
+    
+
+def get_entity_bios(seq,id2label):
+    """Gets entities from sequence.
+    note: BIOS
+    Args:
+        seq (list): sequence of labels.
+    Returns:
+        list: list of (chunk_type, chunk_start, chunk_end).
+    Example:
+        # >>> seq = ['B-PER', 'I-PER', 'O', 'S-LOC']
+        # >>> get_entity_bios(seq)
+        [['PER', 0,1], ['LOC', 3, 3]]
+    """
+    chunks = []
+    chunk = [-1, -1, -1]
+    for indx, tag in enumerate(seq):
+        if not isinstance(tag, str):
+            tag = id2label[tag]
+        if tag.startswith("S-"):
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+            chunk[1] = indx
+            chunk[2] = indx
+            chunk[0] = tag.split('-')[1]
+            chunks.append(chunk)
+            chunk = (-1, -1, -1)
+        if tag.startswith("B-"):
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+            chunk[1] = indx
+            chunk[0] = tag.split('-')[1]
+        elif tag.startswith('I-') and chunk[1] != -1:
+            _type = tag.split('-')[1]
+            if _type == chunk[0]:
+                chunk[2] = indx
+            if indx == len(seq) - 1:
+                chunks.append(chunk)
+        else:
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+    return chunks
 
 
-def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer,
-                                 cls_token_at_end=False, cls_token="[CLS]", cls_token_segment_id=1,
-                                 sep_token="[SEP]", pad_on_left=False, pad_token=0, pad_token_segment_id=0,
-                                 sequence_a_segment_id=0, mask_padding_with_zero=True,):
+def get_entity_bio(seq,id2label):
+    """Gets entities from sequence.
+    note: BIO
+    Args:
+        seq (list): sequence of labels.
+    Returns:
+        list: list of (chunk_type, chunk_start, chunk_end).
+    Example:
+        seq = ['B-PER', 'I-PER', 'O', 'B-LOC']
+        get_entity_bio(seq)
+        #output
+        [['PER', 0,1], ['LOC', 3, 3]]
+    """
+    chunks = []
+    chunk = [-1, -1, -1]
+    for indx, tag in enumerate(seq):
+        if not isinstance(tag, str):
+            tag = id2label[tag]
+        if tag.startswith("B-"):
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+            chunk[1] = indx
+            chunk[0] = tag.split('-')[1]
+            chunk[2] = indx
+            if indx == len(seq) - 1:
+                chunks.append(chunk)
+        elif tag.startswith('I-') and chunk[1] != -1:
+            _type = tag.split('-')[1]
+            if _type == chunk[0]:
+                chunk[2] = indx
+
+            if indx == len(seq) - 1:
+                chunks.append(chunk)
+        else:
+            if chunk[2] != -1:
+                chunks.append(chunk)
+            chunk = [-1, -1, -1]
+    return chunks
+
+
+def get_entities(seq,id2label,markup='bios'):
+    '''
+    :param seq:
+    :param id2label:
+    :param markup:
+    :return:
+    '''
+    assert markup in ['bio','bios']
+    if markup =='bio':
+        return get_entity_bio(seq,id2label)
+    else:
+        return get_entity_bios(seq,id2label)
+
+
+def bert_extract_item(start_logits, end_logits):
+    S = []
+    start_pred = torch.argmax(start_logits, -1).cpu().numpy()[0][1:-1]
+    end_pred = torch.argmax(end_logits, -1).cpu().numpy()[0][1:-1]
+    for i, s_l in enumerate(start_pred):
+        if s_l == 0:
+            continue
+        for j, e_l in enumerate(end_pred[i:]):
+            if s_l == e_l:
+                S.append((s_l, i, i + j))
+                break
+    return S
+
+
+class CnerProcessor(DataProcessor):
+    """Processor for the chinese ner data set."""
+    
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_text(os.path.join(data_dir, "train.txt")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_text(os.path.join(data_dir, "dev.txt")), "dev")
+
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_text(os.path.join(data_dir, "test.txt")), "test")
+
+    def get_labels(self):
+        """See base class."""
+        return ["X", 'B-CONT', 'B-EDU', 'B-LOC', 'B-NAME', 'B-ORG', 'B-PRO', 'B-RACE', 'B-TITLE',
+                'I-CONT', 'I-EDU', 'I-LOC', 'I-NAME', 'I-ORG', 'I-PRO', 'I-RACE', 'I-TITLE',
+                'O', 'S-NAME', 'S-ORG', 'S-RACE', constants.CLS, constants.SEP]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%s-%s" % (set_type, i)
+            text_a = line['words']
+            # BIOS
+            labels = []
+            for x in line['labels']:
+                if 'M-' in x:
+                    labels.append(x.replace('M-', 'I-'))
+                elif 'E-' in x:
+                    labels.append(x.replace('E-', 'I-'))
+                else:
+                    labels.append(x)
+            examples.append(InputExample(guid=guid, text_a=text_a, labels=labels))
+        return examples
+
+
+class CnerProcessorSpan(DataProcessor):
+    """Processor for the chinese span ner data set."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_text(os.path.join(data_dir, "train.txt")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_text(os.path.join(data_dir, "dev.txt")), "dev")
+
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_text(os.path.join(data_dir, "test.txt")), "test")
+
+    def get_labels(self):
+        """See base class."""
+        return ["O", "CONT", "ORG", "LOC", 'EDU', 'NAME', 'PRO', 'RACE', 'TITLE']
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%s-%s" % (set_type, i)
+            text_a = line['words']
+            labels = []
+            for x in line['labels']:
+                if 'M-' in x:
+                    labels.append(x.replace('M-', 'I-'))
+                elif 'E-' in x:
+                    labels.append(x.replace('E-', 'I-'))
+                else:
+                    labels.append(x)
+            subject = get_entities(labels, id2label=None, markup='bios')
+            examples.append(InputExample(guid=guid, text_a=text_a, subject=subject))
+        return examples
+
+
+def collate_fn_normal(batch):
+    """
+    batch should be a list of (sequence, target, length) tuples...
+    Returns a padded tensor of sequences sorted from longest to shortest,
+    """
+    all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels = map(torch.stack, zip(*batch))
+    max_len = max(all_lens).item()
+    all_input_ids = all_input_ids[:, :max_len]
+    all_attention_mask = all_attention_mask[:, :max_len]
+    all_token_type_ids = all_token_type_ids[:, :max_len]
+    all_labels = all_labels[:, :max_len]
+    return all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_lens
+
+
+def collate_fn_span(batch):
+    """
+    batch should be a list of (sequence, target, length) tuples...
+    Returns a padded tensor of sequences sorted from longest to shortest,
+    """
+    all_input_ids, all_input_mask, all_segment_ids, all_start_ids, all_end_ids, all_lens = map(torch.stack, zip(*batch))
+    max_len = max(all_lens).item()
+    all_input_ids = all_input_ids[:, :max_len]
+    all_input_mask = all_input_mask[:, :max_len]
+    all_segment_ids = all_segment_ids[:, :max_len]
+    all_start_ids = all_start_ids[:, :max_len]
+    all_end_ids = all_end_ids[:, :max_len]
+    return all_input_ids, all_input_mask, all_segment_ids, all_start_ids, all_end_ids, all_lens
+
+
+
+def convert_examples_to_features_normal(examples, label_list, max_seq_length, tokenizer,
+                                        cls_token_at_end=False, cls_token="[CLS]", cls_token_segment_id=1,
+                                        sep_token="[SEP]", pad_on_left=False, pad_token=0, pad_token_segment_id=0,
+                                        sequence_a_segment_id=0, mask_padding_with_zero=True, ):
     """ Loads a data file into a list of `InputBatch`s
         `cls_token_at_end` define the location of the CLS token:
             - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
@@ -407,13 +586,143 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
     return features
 
 
+def convert_examples_to_features_span(examples, label_list, max_seq_length, tokenizer,
+                                      cls_token_at_end=False, cls_token="[CLS]", cls_token_segment_id=1,
+                                      sep_token="[SEP]", pad_on_left=False, pad_token=0, pad_token_segment_id=0,
+                                      sequence_a_segment_id=0, mask_padding_with_zero=True, ):
+    """ Loads a data file into a list of `InputBatch`s
+        `cls_token_at_end` define the location of the CLS token:
+            - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+            - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+        `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+    """
+    label2id = {label: i for i, label in enumerate(label_list)}
+    features = []
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 10000 == 0:
+            print("Writing example %d of %d", ex_index, len(examples))
+        textlist = example.text_a
+        subjects = example.subject
+        tokens = tokenizer.tokenize(textlist)
+        start_ids = [0] * len(tokens)
+        end_ids = [0] * len(tokens)
+        subjects_id = []
+        for subject in subjects:
+            label = subject[0]
+            start = subject[1]
+            end = subject[2]
+            start_ids[start] = label2id[label]
+            end_ids[end] = label2id[label]
+            subjects_id.append((label2id[label], start, end))
+        # Account for [CLS] and [SEP] with "- 2".
+        special_tokens_count = 2
+        if len(tokens) > max_seq_length - special_tokens_count:
+            tokens = tokens[: (max_seq_length - special_tokens_count)]
+            start_ids = start_ids[: (max_seq_length - special_tokens_count)]
+            end_ids = end_ids[: (max_seq_length - special_tokens_count)]
+
+        # The convention in BERT is:
+        # (a) For sequence pairs:
+        #  tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
+        #  type_ids:   0   0  0    0    0     0       0   0   1  1  1  1   1   1
+        # (b) For single sequences:
+        #  tokens:   [CLS] the dog is hairy . [SEP]
+        #  type_ids:   0   0   0   0  0     0   0
+        #
+        # Where "type_ids" are used to indicate whether this is the first
+        # sequence or the second sequence. The embedding vectors for `type=0` and
+        # `type=1` were learned during pre-training and are added to the wordpiece
+        # embedding vector (and position vector). This is not *strictly* necessary
+        # since the [SEP] token unambiguously separates the sequences, but it makes
+        # it easier for the model to learn the concept of sequences.
+        #
+        # For classification tasks, the first vector (corresponding to [CLS]) is
+        # used as as the "sentence vector". Note that this only makes sense because
+        # the entire model is fine-tuned.
+        tokens += [sep_token]
+        start_ids += [0]
+        end_ids += [0]
+        segment_ids = [sequence_a_segment_id] * len(tokens)
+        if cls_token_at_end:
+            tokens += [cls_token]
+            start_ids += [0]
+            end_ids += [0]
+            segment_ids += [cls_token_segment_id]
+        else:
+            tokens = [cls_token] + tokens
+            start_ids = [0] + start_ids
+            end_ids = [0] + end_ids
+            segment_ids = [cls_token_segment_id] + segment_ids
+
+        input_ids = tokenizer.convert_tokens_to_ids(tokens)
+        # The mask has 1 for real tokens and 0 for padding tokens. Only real
+        # tokens are attended to.
+        input_mask = [1 if mask_padding_with_zero else 0] * len(input_ids)
+        input_len = len(input_ids)
+        # Zero-pad up to the sequence length.
+        padding_length = max_seq_length - len(input_ids)
+        if pad_on_left:
+            input_ids = ([pad_token] * padding_length) + input_ids
+            input_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + input_mask
+            segment_ids = ([pad_token_segment_id] * padding_length) + segment_ids
+            start_ids = ([0] * padding_length) + start_ids
+            end_ids = ([0] * padding_length) + end_ids
+        else:
+            input_ids += [pad_token] * padding_length
+            input_mask += [0 if mask_padding_with_zero else 1] * padding_length
+            segment_ids += [pad_token_segment_id] * padding_length
+            start_ids += ([0] * padding_length)
+            end_ids += ([0] * padding_length)
+
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+        assert len(start_ids) == max_seq_length
+        assert len(end_ids) == max_seq_length
+
+        features.append(InputFeatures(
+            input_ids=input_ids,
+            input_mask=input_mask,
+            segment_ids=segment_ids,
+            start_ids=start_ids,
+            end_ids=end_ids,
+            subjects=subjects_id,
+            input_len=input_len)
+        )
+    return features
+
+
+def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer,
+                                 cls_token_at_end=False, cls_token="[CLS]", cls_token_segment_id=1,
+                                 sep_token="[SEP]", pad_on_left=False, pad_token=0, pad_token_segment_id=0,
+                                 sequence_a_segment_id=0, mask_padding_with_zero=True, mode="softmax"):
+    if "softmax" in mode or "crf" in mode:
+        return convert_examples_to_features_normal(
+            examples=examples, label_list=label_list, max_seq_length=max_seq_length, tokenizer=tokenizer,
+            cls_token_at_end=cls_token_at_end, cls_token=cls_token, cls_token_segment_id=cls_token_segment_id,
+            sep_token=sep_token, pad_on_left=pad_on_left, pad_token=pad_token,
+            pad_token_segment_id=pad_token_segment_id,
+            sequence_a_segment_id=sequence_a_segment_id, mask_padding_with_zero=mask_padding_with_zero, )
+    elif "span" in mode:
+        return convert_examples_to_features_span(
+            examples=examples, label_list=label_list, max_seq_length=max_seq_length, tokenizer=tokenizer,
+            cls_token_at_end=cls_token_at_end, cls_token=cls_token, cls_token_segment_id=cls_token_segment_id,
+            sep_token=sep_token, pad_on_left=pad_on_left, pad_token=pad_token,
+            pad_token_segment_id=pad_token_segment_id,
+            sequence_a_segment_id=sequence_a_segment_id, mask_padding_with_zero=mask_padding_with_zero, )
+    else:
+        raise TypeError(
+            "None model type find"
+        )
+
+
 def load_and_cache_examples(args, processor, tokenizer, logger, data_type='train'):
     # if args.local_rank not in [-1, 0] and not evaluate:
     #     torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
     # processor = processors[task]()
     # Load data features from cache or dataset file
     cached_features_file = os.path.join(args.data_dir, 'cached-{}-{}.{}'.format(
-        list(filter(None, args.model_name_or_path.split('/'))).pop(),
+        list(filter(None, args.model_name_or_path.split('/'))).pop() + "span" if "span" in args.model_type else "",
         str(args.max_seq_length),
         data_type))
 
@@ -441,6 +750,7 @@ def load_and_cache_examples(args, processor, tokenizer, logger, data_type='train
                                                 # pad on the left for xlnet
                                                 pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
                                                 pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
+                                                mode=args.model_type
                                                 )
         features = features[0:64]
         if args.local_rank in [-1, 0]:
@@ -449,15 +759,27 @@ def load_and_cache_examples(args, processor, tokenizer, logger, data_type='train
     # if args.local_rank == 0 and not evaluate:
     #     torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
     # Convert to Tensors and build dataset
-    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
-    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
-    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
-    all_label_ids = torch.tensor([f.label_ids for f in features], dtype=torch.long)
-    all_lens = torch.tensor([f.input_len for f in features], dtype=torch.long)
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_lens, all_label_ids)
+    if "span" in args.model_type:
+        if data_type == 'dev':
+            return features
+        all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+        all_start_ids = torch.tensor([f.start_ids for f in features], dtype=torch.long)
+        all_end_ids = torch.tensor([f.end_ids for f in features], dtype=torch.long)
+        all_input_lens = torch.tensor([f.input_len for f in features], dtype=torch.long)
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_start_ids, all_end_ids,
+                                all_input_lens)
+    else:
+        all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+        all_label_ids = torch.tensor([f.label_ids for f in features], dtype=torch.long)
+        all_lens = torch.tensor([f.input_len for f in features], dtype=torch.long)
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_lens, all_label_ids)
+
     return dataset
 
 
 if __name__ == "__main__":
     pass
-

@@ -3,15 +3,14 @@ import random
 import shutil
 import logging
 import numpy as np
-from collections import Counter
-from seqeval.metrics import accuracy_score
-from seqeval.metrics import classification_report
-from seqeval.metrics import f1_score
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data.dataset import TensorDataset
 from tensorboardX import SummaryWriter
+
+from preprocessing import bert_extract_item
+from Metric import Metrics, SpanEntityScore, cal_performance
 
 from source.utils.engine import Trainer
 import source.utils.Constant as constants
@@ -89,12 +88,57 @@ def load_pretrain_embed(pretrain_dir, output_dir, word_to_id, emb_dim=300):
     return embeddings
 
 
-def cal_performance(preds, labels):
-    acc = accuracy_score(y_true=labels, y_pred=preds)
-    f1 = f1_score(y_true=labels, y_pred=preds)
-    print(classification_report(y_true=labels, y_pred=preds))
-    mertrics = {"acc": acc, "f1":f1}
-    return mertrics
+def get_optimizer_grouped_parameters(args, model):
+    no_decay = ["bias", "LayerNorm.weight"]
+
+    if args.model_type == "bertsofmax":
+        optimizer_grouped_parameters = [
+            {"params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+             "weight_decay": args.weight_decay, },
+            {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+             "weight_decay": 0.0},
+        ]
+    elif args.model_type == "bertcrf":
+        bert_param_optimizer = list(model.bert.named_parameters())
+        crf_param_optimizer = list(model.crf.named_parameters())
+        linear_param_optimizer = list(model.classifier.named_parameters())
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)],
+             'weight_decay': args.weight_decay, 'lr': args.learning_rate},
+            {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
+             'lr': args.learning_rate},
+
+            {'params': [p for n, p in crf_param_optimizer if not any(nd in n for nd in no_decay)],
+             'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
+            {'params': [p for n, p in crf_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
+             'lr': args.crf_learning_rate},
+
+            {'params': [p for n, p in linear_param_optimizer if not any(nd in n for nd in no_decay)],
+             'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
+            {'params': [p for n, p in linear_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
+             'lr': args.crf_learning_rate}
+        ]
+    else:
+        bert_parameters = model.bert.named_parameters()
+        start_parameters = model.start_fc.named_parameters()
+        end_parameters = model.end_fc.named_parameters()
+        optimizer_grouped_parameters = [
+            {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
+             "weight_decay": args.weight_decay, 'lr': args.learning_rate},
+            {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
+                , 'lr': args.learning_rate},
+
+            {"params": [p for n, p in start_parameters if not any(nd in n for nd in no_decay)],
+             "weight_decay": args.weight_decay, 'lr': 0.001},
+            {"params": [p for n, p in start_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
+                , 'lr': 0.001},
+
+            {"params": [p for n, p in end_parameters if not any(nd in n for nd in no_decay)],
+             "weight_decay": args.weight_decay, 'lr': 0.001},
+            {"params": [p for n, p in end_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
+                , 'lr': 0.001},
+        ]
+    return optimizer_grouped_parameters
 
 
 class trainer(Trainer):
@@ -140,11 +184,19 @@ class trainer(Trainer):
         tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-            if hasattr(self.args, "bert"):
+            if self.args.model_type == "bertsoftmax" or self.args.model_type == "bertcrf":
                 batch = tuple(t.to(self.args.device) for t in batch)
                 inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
                 if self.args.model_type != "distilbert":
                     # XLM and RoBERTa don't use segment_ids
+                    inputs["token_type_ids"] = (batch[2] if self.args.model_type in ["bert", "xlnet"] else None)
+                outputs = self.model(**inputs)
+            elif self.args.model_type == "bertspan":
+                batch = tuple(t.to(self.args.device) for t in batch)
+                inputs = {"input_ids": batch[0], "attention_mask": batch[1],
+                          "start_positions": batch[3], "end_positions": batch[4]}
+                if self.args.model_type != "distilbert":
+                    # XLM and RoBERTa don"t use segment_ids
                     inputs["token_type_ids"] = (batch[2] if self.args.model_type in ["bert", "xlnet"] else None)
                 outputs = self.model(**inputs)
             else:
@@ -191,8 +243,10 @@ class trainer(Trainer):
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
                 self.model.to(self.args.device)
-                if hasattr(self.args, "bert"):
-                    metrics = evaluate_bert(self.args, self.model, self.valid_iter, self.logger)
+                if self.args.model_type == "bertsoftmax" or self.args.model_type == "bertcrf":
+                    metrics = evaluate_bert_normal(self.args, self.model, self.valid_iter, self.logger)
+                elif self.args.model_type == "bertspan":
+                    metrics = evaluate_bert_span(self.args, self.model, self.valid_iter, self.logger)
                 else:
                     metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
                 cur_valid_metric = metrics[self.valid_metric_name]
@@ -330,7 +384,7 @@ def evaluate(args, model, valid_dataset, logger):
                     break
                 else:
                     temp_1.append(args.id2label[out_label_ids[i][j]])
-                    if hasattr(args, "optimized"):
+                    if args.optimized:
                         temp_2.append(args.id2label[tags[i][j]])
                     else:
                         temp_2.append(tags[i][j])
@@ -351,7 +405,7 @@ def evaluate(args, model, valid_dataset, logger):
     return metrics
 
 
-def evaluate_bert(args, model, valid_dataset, logger):
+def evaluate_bert_normal(args, model, valid_dataset, logger):
     eval_loss = 0.0
     nb_eval_steps = 0
     labels, preds = [], []
@@ -389,195 +443,58 @@ def evaluate_bert(args, model, valid_dataset, logger):
                     temp_1.append(args.id2label[out_label_ids[i][j]])
                     temp_2.append(args.id2label[pred[i][j]])
 
-    # 其他评估
-    metrics = Metrics(labels, preds)
-    metrics.report_scores()
-    # metrics.report_confusion_matrix()
-    results = {"f1": metrics.avg_metrics['f1_score'], "acc": metrics.precision_scores}
-    results.update({"loss": eval_loss})
-    return results
+    ## 其他评估
+    # metrics = Metrics(labels, preds)
+    # metrics.report_scores()
+    # # metrics.report_confusion_matrix()
+    # results = {"f1": metrics.avg_metrics['f1_score'], "acc": metrics.precision_scores}
+    # results.update({"loss": eval_loss})
+    # return results
 
     # seqeval评估
-    # metrics = cal_performance(preds, labels)
-    # metrics.update({"loss": eval_loss})
-    # for key in sorted(metrics.keys()):
-    #     logger.info("  %s = %s", key.upper(), str(metrics[key]))
-    # return metrics
+    metrics = cal_performance(preds, labels)
+    metrics.update({"loss": eval_loss})
+    for key in sorted(metrics.keys()):
+        logger.info("  %s = %s", key.upper(), str(metrics[key]))
+    return metrics
 
 
-def flatten_lists(lists):
-    flatten_list = []
-    for l in lists:
-        if type(l) == list:
-            flatten_list += l
-        else:
-            flatten_list.append(l)
-    return flatten_list
+# TODO 评估需要处理
+def evaluate_bert_span(args, model, eval_features, logger):
 
+    metric = SpanEntityScore(args.id2label)
+    # Eval!
+    eval_loss, nb_eval_steps = 0.0, 0
+    for step, f in enumerate(eval_features):
+        input_lens = f.input_len
+        input_ids = torch.tensor([f.input_ids[:input_lens]], dtype=torch.long).to(args.device)
+        input_mask = torch.tensor([f.input_mask[:input_lens]], dtype=torch.long).to(args.device)
+        segment_ids = torch.tensor([f.segment_ids[:input_lens]], dtype=torch.long).to(args.device)
+        start_ids = torch.tensor([f.start_ids[:input_lens]], dtype=torch.long).to(args.device)
+        end_ids = torch.tensor([f.end_ids[:input_lens]], dtype=torch.long).to(args.device)
+        subjects = f.subjects
+        model.eval()
+        with torch.no_grad():
+            inputs = {"input_ids": input_ids, "attention_mask": input_mask,
+                      "start_positions": start_ids, "end_positions": end_ids}
+            if args.model_type != "distilbert":
+                # XLM and RoBERTa don"t use segment_ids
+                inputs["token_type_ids"] = (segment_ids if args.model_type in ["bert", "xlnet"] else None)
+            outputs = model(**inputs)
+        tmp_eval_loss, start_logits, end_logits = outputs[:3]
+        R = bert_extract_item(start_logits, end_logits)
+        T = subjects
+        metric.update(true_subject=T, pred_subject=R)
+        if args.n_gpu > 1:
+            tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
+        eval_loss += tmp_eval_loss.item()
+        nb_eval_steps += 1
 
-class Metrics(object):
-    """用于评价模型，计算每个标签的精确率，召回率，F1分数"""
+    eval_loss = eval_loss / nb_eval_steps
+    eval_info, entity_info = metric.result()
+    results = {f'{key}': value for key, value in eval_info.items()}
+    results['loss'] = eval_loss
 
-    def __init__(self, golden_tags, predict_tags, remove_O=False):
-
-        # [[t1, t2], [t3, t4]...] --> [t1, t2, t3, t4...]
-        self.golden_tags = flatten_lists(golden_tags)
-        self.predict_tags = flatten_lists(predict_tags)
-
-        if remove_O:  # 将O标记移除，只关心实体标记
-            self._remove_Otags()
-
-        # 辅助计算的变量
-        self.tagset = set(self.golden_tags)
-        self.correct_tags_number = self.count_correct_tags()
-        self.predict_tags_counter = Counter(self.predict_tags)
-        self.golden_tags_counter = Counter(self.golden_tags)
-
-        # 计算精确率
-        self.precision_scores = self.cal_precision()
-
-        # 计算召回率
-        self.recall_scores = self.cal_recall()
-
-        # 计算F1分数
-        self.f1_scores = self.cal_f1()
-
-    def cal_precision(self):
-
-        precision_scores = {}
-        for tag in self.tagset:
-            if not self.correct_tags_number.get(tag, 0):
-                precision_scores[tag] = 0.0
-            else:
-                precision_scores[tag] = self.correct_tags_number.get(tag, 0) / self.predict_tags_counter[tag]
-
-        return precision_scores
-
-    def cal_recall(self):
-
-        recall_scores = {}
-        for tag in self.tagset:
-            recall_scores[tag] = self.correct_tags_number.get(tag, 0) / \
-                self.golden_tags_counter[tag]
-        return recall_scores
-
-    def cal_f1(self):
-        f1_scores = {}
-        for tag in self.tagset:
-            p, r = self.precision_scores[tag], self.recall_scores[tag]
-            f1_scores[tag] = 2*p*r / (p+r+1e-10)  # 加上一个特别小的数，防止分母为0
-        return f1_scores
-
-    def report_scores(self):
-        """将结果用表格的形式打印出来，像这个样子：
-                      precision    recall  f1-score   support
-              B-LOC      0.775     0.757     0.766      1084
-              I-LOC      0.601     0.631     0.616       325
-             B-MISC      0.698     0.499     0.582       339
-             I-MISC      0.644     0.567     0.603       557
-              B-ORG      0.795     0.801     0.798      1400
-              I-ORG      0.831     0.773     0.801      1104
-              B-PER      0.812     0.876     0.843       735
-              I-PER      0.873     0.931     0.901       634
-          avg/total      0.779     0.764     0.770      6178
-        """
-        # 打印表头
-        header_format = '{:>9s}  {:>9} {:>9} {:>9} {:>9}'
-        header = ['precision', 'recall', 'f1-score', 'support']
-        print(header_format.format('', *header))
-
-        row_format = '{:>9s}  {:>9.4f} {:>9.4f} {:>9.4f} {:>9}'
-        # 打印每个标签的 精确率、召回率、f1分数
-        for tag in self.tagset:
-            print(row_format.format(
-                tag,
-                self.precision_scores[tag],
-                self.recall_scores[tag],
-                self.f1_scores[tag],
-                self.golden_tags_counter[tag]
-            ))
-
-        # 计算并打印平均值
-        self.avg_metrics = self._cal_weighted_average()
-        print(row_format.format(
-            'avg/total',
-            self.avg_metrics['precision'],
-            self.avg_metrics['recall'],
-            self.avg_metrics['f1_score'],
-            len(self.golden_tags)
-        ))
-
-    def count_correct_tags(self):
-        """计算每种标签预测正确的个数(对应精确率、召回率计算公式上的tp)，用于后面精确率以及召回率的计算"""
-        correct_dict = {}
-        for gold_tag, predict_tag in zip(self.golden_tags, self.predict_tags):
-            if gold_tag == predict_tag:
-                if gold_tag not in correct_dict:
-                    correct_dict[gold_tag] = 1
-                else:
-                    correct_dict[gold_tag] += 1
-
-        return correct_dict
-
-    def _cal_weighted_average(self):
-
-        weighted_average = {}
-        total = len(self.golden_tags)
-
-        # 计算weighted precisions:
-        weighted_average['precision'] = 0.
-        weighted_average['recall'] = 0.
-        weighted_average['f1_score'] = 0.
-        for tag in self.tagset:
-            size = self.golden_tags_counter[tag]
-            weighted_average['precision'] += self.precision_scores[tag] * size
-            weighted_average['recall'] += self.recall_scores[tag] * size
-            weighted_average['f1_score'] += self.f1_scores[tag] * size
-
-        for metric in weighted_average.keys():
-            weighted_average[metric] /= total
-
-        return weighted_average
-
-    def _remove_Otags(self):
-
-        length = len(self.golden_tags)
-        O_tag_indices = [i for i in range(length)
-                         if self.golden_tags[i] == 'O']
-
-        self.golden_tags = [tag for i, tag in enumerate(self.golden_tags)
-                            if i not in O_tag_indices]
-
-        self.predict_tags = [tag for i, tag in enumerate(self.predict_tags)
-                             if i not in O_tag_indices]
-        print("原总标记数为{}，移除了{}个O标记，占比{:.2f}%".format(
-            length,
-            len(O_tag_indices),
-            len(O_tag_indices) / length * 100
-        ))
-
-    def report_confusion_matrix(self):
-        """计算混淆矩阵"""
-
-        print("\nConfusion Matrix:")
-        tag_list = list(self.tagset)
-        # 初始化混淆矩阵 matrix[i][j]表示第i个tag被模型预测成第j个tag的次数
-        tags_size = len(tag_list)
-        matrix = []
-        for i in range(tags_size):
-            matrix.append([0] * tags_size)
-
-        # 遍历tags列表
-        for golden_tag, predict_tag in zip(self.golden_tags, self.predict_tags):
-            try:
-                row = tag_list.index(golden_tag)
-                col = tag_list.index(predict_tag)
-                matrix[row][col] += 1
-            except ValueError:  # 有极少数标记没有出现在golden_tags，但出现在predict_tags，跳过这些标记
-                continue
-
-        # 输出矩阵
-        row_format_ = '{:>7} ' * (tags_size+1)
-        print(row_format_.format("", *tag_list))
-        for i, row in enumerate(matrix):
-            print(row_format_.format(tag_list[i], *row))
+    for key in sorted(results.keys()):
+        logger.info("  %s = %s", key.upper(), str(results[key]))
+    return results

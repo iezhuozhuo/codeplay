@@ -7,21 +7,30 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 from transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
 
-from preprocessing import CnerProcessor, load_and_cache_examples, collate_fn, CNerTokenizer
+from preprocessing import (CnerProcessor, CnerProcessorSpan, CNerTokenizer, load_and_cache_examples,
+                           collate_fn_normal, collate_fn_span)
 from train_utils import (
-    set_seed, checkoutput_and_setcuda, init_logger, trainer, evaluate,)
+    set_seed, checkoutput_and_setcuda, init_logger, get_optimizer_grouped_parameters, trainer, evaluate)
 from ModelConfig import BertModelConfig
 
 from source.utils.engine import BasicConfig
 import source.utils.Constant as constants
-from source.models.ner import BertSoftmaxForNer, BertCrfForNer
+from source.models.ner import BertSoftmaxForNer, BertCrfForNer, BertSpanForNer
 from source.callback.optimizater.adamw import AdamW
 from source.callback.lr_scheduler import get_linear_schedule_with_warmup
 
 
 MODEL_CLASSES = {
     'bertsoftmax': (BertModelConfig, BertSoftmaxForNer, CNerTokenizer),
-    'bertcrf': (BertModelConfig, BertCrfForNer, CNerTokenizer)
+    'bertcrf': (BertModelConfig, BertCrfForNer, CNerTokenizer), # bertcrf使用的是crf v2
+    'bertspan': (BertModelConfig, BertSpanForNer, CNerTokenizer)
+}
+
+
+ProcessorClass = {
+    "bertsoftmax": CnerProcessor,
+    'bertcrf': CnerProcessor,
+    "bertspan": CnerProcessorSpan,
 }
 
 
@@ -37,8 +46,8 @@ def main():
     # Set seed
     set_seed(args)
 
-    specials = [constants.UNK_WORD, constants.PAD_WORD, constants.CLS, constants.SEP]
-    processor = CnerProcessor()
+    # specials = [constants.UNK_WORD, constants.PAD_WORD, constants.CLS, constants.SEP]
+    processor = ProcessorClass[args.model_type]()
     label_list = processor.get_labels()
     args.id2label = {i: label for i, label in enumerate(label_list)}
     args.label2id = {label: i for i, label in enumerate(label_list)}
@@ -50,6 +59,7 @@ def main():
                                           cache_dir=args.cache_dir if args.cache_dir else None,
                                           num_hidden_layers=3)
     config.loss_type = args.loss_type
+    config.soft_label = True
 
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case,
@@ -62,17 +72,24 @@ def main():
 
     # Training
     if args.do_train:
+
+        collate_fn = collate_fn_normal if "span" not in args.model_type else collate_fn_span
+
         train_dataset = load_and_cache_examples(args, processor, tokenizer, logger, data_type='train')
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
         train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size,
                                       collate_fn=collate_fn)
 
+        # TODO span evaluation data读入合并
         eval_dataset = load_and_cache_examples(args, processor, tokenizer, logger, data_type='dev')
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-        eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
-        eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
-                                     collate_fn=collate_fn)
+        if "span" not in args.model_type:
+            eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
+            eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
+                                         collate_fn=collate_fn)
+        else:
+            eval_dataloader = eval_dataset
 
         args.logging_steps = len(train_dataloader) // args.gradient_accumulation_steps // 5 if len(train_dataloader) // args.gradient_accumulation_steps // 5 else 1
         args.valid_steps = len(train_dataloader)
@@ -84,13 +101,7 @@ def main():
         else:
             t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
 
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {"params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-             "weight_decay": args.weight_decay, },
-            {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-             "weight_decay": 0.0},
-        ]
+        optimizer_grouped_parameters = get_optimizer_grouped_parameters(args, model)
         args.warmup_steps = int(t_total * args.warmup_proportion) if args.warmup_steps == 0 else args.warmup_steps
         optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
