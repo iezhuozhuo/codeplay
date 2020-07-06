@@ -722,7 +722,7 @@ def load_and_cache_examples(args, processor, tokenizer, logger, data_type='train
     # processor = processors[task]()
     # Load data features from cache or dataset file
     cached_features_file = os.path.join(args.data_dir, 'cached-{}-{}.{}'.format(
-        list(filter(None, args.model_name_or_path.split('/'))).pop() + "span" if "span" in args.model_type else "",
+        list(filter(None, args.model_name_or_path.split('/'))).pop() + "-span" if "span" in args.model_type else "",
         str(args.max_seq_length),
         data_type))
 
@@ -760,7 +760,7 @@ def load_and_cache_examples(args, processor, tokenizer, logger, data_type='train
     #     torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
     # Convert to Tensors and build dataset
     if "span" in args.model_type:
-        if data_type == 'dev':
+        if data_type == 'dev' or data_type == "test":
             return features
         all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
         all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)

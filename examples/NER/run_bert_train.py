@@ -10,7 +10,8 @@ from transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
 from preprocessing import (CnerProcessor, CnerProcessorSpan, CNerTokenizer, load_and_cache_examples,
                            collate_fn_normal, collate_fn_span)
 from train_utils import (
-    set_seed, checkoutput_and_setcuda, init_logger, get_optimizer_grouped_parameters, trainer, evaluate)
+    set_seed, checkoutput_and_setcuda, init_logger, get_optimizer_grouped_parameters,
+    trainer, evaluate, evaluate_bert_normal, evaluate_bert_span)
 from ModelConfig import BertModelConfig
 
 from source.utils.engine import BasicConfig
@@ -69,19 +70,15 @@ def main():
                                         config=config, cache_dir=args.cache_dir if args.cache_dir else None,)
 
     logger.info("Training/evaluation parameters %s", args)
-
+    collate_fn = collate_fn_normal if "span" not in args.model_type else collate_fn_span
     # Training
     if args.do_train:
-
-        collate_fn = collate_fn_normal if "span" not in args.model_type else collate_fn_span
-
         train_dataset = load_and_cache_examples(args, processor, tokenizer, logger, data_type='train')
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
         train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size,
                                       collate_fn=collate_fn)
 
-        # TODO span evaluation data读入合并
         eval_dataset = load_and_cache_examples(args, processor, tokenizer, logger, data_type='dev')
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
         if "span" not in args.model_type:
@@ -130,8 +127,15 @@ def main():
 
     # Test
     if args.do_test:
+        eval_dataset = load_and_cache_examples(args, processor, tokenizer, logger, data_type='test')
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-        test_dataloader = processor.create_batch(data_type="test")
+        if "span" not in args.model_type:
+            eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(
+                eval_dataset)
+            eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
+                                         collate_fn=collate_fn)
+        else:
+            eval_dataloader = eval_dataset
 
         trainer_op = trainer(args=args,
                              model=model,
@@ -149,7 +153,12 @@ def main():
         best_train_file = os.path.join(args.output_dir, "best.train")
         trainer_op.load(best_model_file, best_train_file)
 
-        evaluate(args, trainer_op.model, test_dataloader, logger)
+        if args.model_type == "bertsoftmax" or args.model_type == "bertcrf":
+            metrics = evaluate_bert_normal(args, trainer_op.model, eval_dataloader, logger)
+        elif args.model_type == "bertspan":
+            metrics = evaluate_bert_span(args, trainer_op.model, eval_dataloader, logger)
+        else:
+            metrics = evaluate(args, trainer_op.model, eval_dataloader, logger)
 
     # TODO: Infer case study
     if args.do_infer:
