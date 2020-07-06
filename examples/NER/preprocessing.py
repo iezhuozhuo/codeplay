@@ -752,7 +752,7 @@ def load_and_cache_examples(args, processor, tokenizer, logger, data_type='train
                                                 pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
                                                 mode=args.model_type
                                                 )
-        features = features[0:64]
+        # features = features[0:64]
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)

@@ -243,12 +243,14 @@ class trainer(Trainer):
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
                 self.model.to(self.args.device)
+                if isinstance(self.model, torch.nn.DataParallel):
+                    model = self.model.module
                 if self.args.model_type == "bertsoftmax" or self.args.model_type == "bertcrf":
-                    metrics = evaluate_bert_normal(self.args, self.model, self.valid_iter, self.logger)
+                    metrics = evaluate_bert_normal(self.args, model, self.valid_iter, self.logger)
                 elif self.args.model_type == "bertspan":
-                    metrics = evaluate_bert_span(self.args, self.model, self.valid_iter, self.logger)
+                    metrics = evaluate_bert_span(self.args, model, self.valid_iter, self.logger)
                 else:
-                    metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
+                    metrics = evaluate(self.args, model, self.valid_iter, self.logger)
                 cur_valid_metric = metrics[self.valid_metric_name]
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric

@@ -58,7 +58,7 @@ def main():
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                           num_labels=num_labels, loss_type=args.loss_type,
                                           cache_dir=args.cache_dir if args.cache_dir else None,
-                                          num_hidden_layers=3)
+                                          num_hidden_layers=12)
     config.loss_type = args.loss_type
     config.soft_label = True
 
@@ -166,4 +166,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    from transformers import AutoTokenizer, AutoModelWithLMHead
+
+    # tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
+    config = BertConfig.from_pretrained("bert-base-chinese")
+    # print(config)
