@@ -95,14 +95,16 @@ class SummaGenCorpus(object):
         logger.info("Reading Data ...")
         data_raw = self.read_data(data_article_file, data_summary_file, data_type="train")
         random.shuffle(data_raw)
-        train_raw = data_raw[:600_000]
-        valid_raw = data_raw[600_000:]
+        train_raw = data_raw[:int(len(data_raw) * 0.95)]
+        valid_raw = data_raw[int(len(data_raw) * 0.95):]
+        # train_raw = data_raw[:600_000]
+        # valid_raw = data_raw[600_000:]
         # train_raw = data_raw[:10_000]
         # valid_raw = data_raw[10_000:]
         # test_raw = train_raw[601_000:]
         logger.info("Build Vocab from {} and {} ...".format(data_article_file, data_summary_file))
         # 根据训练集来定制词表
-        self.build_vocab(train_raw)
+        self.build_vocab(data_raw)
 
         train_data = self.build_examples(train_raw, data_type="train")
         valid_data = self.build_examples(valid_raw, data_type="valid")
@@ -193,13 +195,14 @@ class SummaGenCorpus(object):
             # article_ids += [self.field["article"].stoi[constants.BOS_WORD]]
             # article_ids = [self.field["article"].stoi[constants.EOS_WORD]] + article_ids
 
-            summary_input_ids = [self.field["summary"].stoi[constants.EOS_WORD]] + summary_ids
+            summary_input_ids = [self.field["summary"].stoi[constants.BOS_WORD]] + summary_ids
             summary_taget_ids = summary_ids[:]
             if len(summary_input_ids) > self.args.max_dec_seq_length:
                 summary_input_ids = summary_input_ids[: self.args.max_dec_seq_length]  # 无结束标志
                 summary_taget_ids = summary_taget_ids[: self.args.max_dec_seq_length]
             else:
-                summary_taget_ids.append(self.field["summary"].stoi[constants.BOS_WORD])  # 无截断有结束标志
+                summary_taget_ids.append(self.field["summary"].stoi[constants.EOS_WORD])  # 无截断有结束标志
+            assert len(summary_input_ids) == len(summary_taget_ids)
             summary_len = len(summary_input_ids)
 
 
@@ -219,21 +222,21 @@ class SummaGenCorpus(object):
                 else:
                     summary_taget_ids.append(self.field["summary"].stoi[constants.BOS_WORD])  # 无截断有结束标志
                 len_article_oov.append(len(article_oovs))
-                extra_zeros = [0] * self.args.max.max_oov_len
+                extra_zeros = [0] * self.args.max_oov_len
 
             article_mask = [1] * article_len
             summary_mask = [1] * summary_len
 
             # padding
             padding_id = self.field["article"].stoi[constants.PAD_WORD]
-            article_ids = self.padding_seq(article_ids, self.args.max_enc_seq_len, padding_id)
-            article_mask = self.padding_seq(article_mask, self.args.max_enc_seq_len, padding_id)
+            article_ids = self.padding_seq(article_ids, self.args.max_enc_seq_length, padding_id)
+            article_mask = self.padding_seq(article_mask, self.args.max_enc_seq_length, padding_id)
             # article_oovs = self.
-            summary_input_ids = self.padding_seq(summary_input_ids, self.args.max_dec_seq_len, padding_id)
-            summary_taget_ids = self.padding_seq(summary_taget_ids, self.args.max_dec_seq_len, padding_id)
-            summary_mask = self.padding_seq(summary_mask, self.args.max_dec_seq_len, padding_id)
+            summary_input_ids = self.padding_seq(summary_input_ids, self.args.max_dec_seq_length, padding_id)
+            summary_taget_ids = self.padding_seq(summary_taget_ids, self.args.max_dec_seq_length, padding_id)
+            summary_mask = self.padding_seq(summary_mask, self.args.max_dec_seq_length, padding_id)
             if self.args.pointer_gen:
-                article_ids_extend_vocab = self.padding_seq(article_ids_extend_vocab, self.args.max_enc_seq_len, padding_id)
+                article_ids_extend_vocab = self.padding_seq(article_ids_extend_vocab, self.args.max_enc_seq_length, padding_id)
                 article_oovs = self.padding_seq(article_oovs, self.args.max_oov_len, padding_id)
 
             examples.append(InputFeatures(

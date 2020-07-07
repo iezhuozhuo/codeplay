@@ -4,7 +4,7 @@
 def configs(parser):
     parser.add_argument("--max_enc_seq_length", type=int, default=128)
     parser.add_argument("--max_dec_seq_length", type=int, default=64)
-    parser.add_argument("--max_oov_len", type=int, default=20)
+    parser.add_argument("--max_oov_len", type=int, default=22)
     parser.add_argument("--pointer_gen", action="store_true", help="whether use the pointer_gen")
     parser.add_argument(
         "--article_file",
