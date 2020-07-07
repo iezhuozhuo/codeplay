@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="On explicit save action" serverName="gong@10.112.251.61:22 password" autoUploadExternalChanges="true">
+  <component name="PublishConfigData" autoUpload="Always" serverName="gong@10.112.251.61:22 password" autoUploadExternalChanges="true">
     <serverData>
       <paths name="gong@10.112.251.61:22 password">
         <serverdata>
@@ -17,6 +17,6 @@
         </serverdata>
       </paths>
     </serverData>
-    <option name="myAutoUpload" value="ON_EXPLICIT_SAVE" />
+    <option name="myAutoUpload" value="ALWAYS" />
   </component>
 </project>

@@ -1,19 +1,18 @@
+# encoding utf-8
 import os
 import random
 import shutil
 import logging
 import numpy as np
+from sklearn.metrics import f1_score
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data.dataset import TensorDataset
 from tensorboardX import SummaryWriter
 
-from preprocessing import bert_extract_item
-from Metric import Metrics, SpanEntityScore, cal_performance
+from Metrics import cal_performance
 
 from source.utils.engine import Trainer
-import source.utils.Constant as constants
 
 
 def set_seed(args):
@@ -25,6 +24,7 @@ def set_seed(args):
 
 
 def checkoutput_and_setcuda(args):
+    args.output_dir = os.path.join(args.output_dir, args.model_type)
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
@@ -51,94 +51,23 @@ def checkoutput_and_setcuda(args):
     return args
 
 
-def init_logger(args):
+def init_logger(args=None):
     logger = logging.getLogger(__name__)
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
+        level=logging.INFO,
     )
-    logger.warning(
-        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
-        args.local_rank,
-        args.device,
-        args.n_gpu,
-        bool(args.local_rank != -1),
-        args.fp16,
-    )
+    if args != None:
+        logger.warning(
+            "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
+            args.local_rank,
+            args.device,
+            args.n_gpu,
+            bool(args.local_rank != -1),
+            args.fp16,
+        )
     return logger
-
-
-def load_pretrain_embed(pretrain_dir, output_dir, word_to_id, emb_dim=300):
-    filename_trimmed_dir = os.path.join(output_dir, "embedding_SougouNews.npz")
-
-    if os.path.exists(filename_trimmed_dir):
-        embeddings = np.load(filename_trimmed_dir)["embeddings"].astype('float32')
-        return embeddings
-
-    embeddings = np.random.rand(len(word_to_id), emb_dim)
-    with open(pretrain_dir, "r", encoding='UTF-8') as f:
-        for i, line in enumerate(f.readlines()):
-            lin = line.strip().split(" ")
-            if lin[0] in word_to_id:
-                idx = word_to_id[lin[0]]
-                emb = [float(x) for x in lin[1:301]]
-                embeddings[idx] = np.asarray(emb, dtype='float32')
-        np.savez_compressed(filename_trimmed_dir, embeddings=embeddings)
-    return embeddings
-
-
-def get_optimizer_grouped_parameters(args, model):
-    no_decay = ["bias", "LayerNorm.weight"]
-
-    if args.model_type == "bertsofmax":
-        optimizer_grouped_parameters = [
-            {"params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-             "weight_decay": args.weight_decay, },
-            {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-             "weight_decay": 0.0},
-        ]
-    elif args.model_type == "bertcrf":
-        bert_param_optimizer = list(model.bert.named_parameters())
-        crf_param_optimizer = list(model.crf.named_parameters())
-        linear_param_optimizer = list(model.classifier.named_parameters())
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)],
-             'weight_decay': args.weight_decay, 'lr': args.learning_rate},
-            {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
-             'lr': args.learning_rate},
-
-            {'params': [p for n, p in crf_param_optimizer if not any(nd in n for nd in no_decay)],
-             'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
-            {'params': [p for n, p in crf_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
-             'lr': args.crf_learning_rate},
-
-            {'params': [p for n, p in linear_param_optimizer if not any(nd in n for nd in no_decay)],
-             'weight_decay': args.weight_decay, 'lr': args.crf_learning_rate},
-            {'params': [p for n, p in linear_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
-             'lr': args.crf_learning_rate}
-        ]
-    else:
-        bert_parameters = model.bert.named_parameters()
-        start_parameters = model.start_fc.named_parameters()
-        end_parameters = model.end_fc.named_parameters()
-        optimizer_grouped_parameters = [
-            {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
-             "weight_decay": args.weight_decay, 'lr': args.learning_rate},
-            {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
-                , 'lr': args.learning_rate},
-
-            {"params": [p for n, p in start_parameters if not any(nd in n for nd in no_decay)],
-             "weight_decay": args.weight_decay, 'lr': 0.001},
-            {"params": [p for n, p in start_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
-                , 'lr': 0.001},
-
-            {"params": [p for n, p in end_parameters if not any(nd in n for nd in no_decay)],
-             "weight_decay": args.weight_decay, 'lr': 0.001},
-            {"params": [p for n, p in end_parameters if any(nd in n for nd in no_decay)], "weight_decay": 0.0
-                , 'lr': 0.001},
-        ]
-    return optimizer_grouped_parameters
 
 
 class trainer(Trainer):
@@ -184,26 +113,8 @@ class trainer(Trainer):
         tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-            if self.args.model_type == "bertsoftmax" or self.args.model_type == "bertcrf":
-                batch = tuple(t.to(self.args.device) for t in batch)
-                inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
-                if self.args.model_type != "distilbert":
-                    # XLM and RoBERTa don't use segment_ids
-                    inputs["token_type_ids"] = (batch[2] if self.args.model_type in ["bert", "xlnet"] else None)
-                outputs = self.model(**inputs)
-            elif self.args.model_type == "bertspan":
-                batch = tuple(t.to(self.args.device) for t in batch)
-                inputs = {"input_ids": batch[0], "attention_mask": batch[1],
-                          "start_positions": batch[3], "end_positions": batch[4]}
-                if self.args.model_type != "distilbert":
-                    # XLM and RoBERTa don"t use segment_ids
-                    inputs["token_type_ids"] = (batch[2] if self.args.model_type in ["bert", "xlnet"] else None)
-                outputs = self.model(**inputs)
-            else:
-                inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(self.args.device) for t in batch)
-                outputs = self.model(inputs=(inputs_id, inputs_len) + tuple(_), labels=inputs_label)
-                # outputs = self.model(inputs=inputs_id, labels=inputs_label)
-
+            batch = tuple(t.to(self.args.device) for t in batch)
+            outputs = self.model(batch)
             loss = outputs[0]
 
             if self.args.n_gpu > 1:
@@ -245,17 +156,12 @@ class trainer(Trainer):
 
                 if isinstance(self.model, torch.nn.DataParallel):
                     model = self.model.module
-                    model.to(self.args.device)
                 else:
                     model = self.model
-                    model.to(self.args.device)
+                model.to(self.args.device)
 
-                if self.args.model_type == "bertsoftmax" or self.args.model_type == "bertcrf":
-                    metrics = evaluate_bert_normal(self.args, model, self.valid_iter, self.logger)
-                elif self.args.model_type == "bertspan":
-                    metrics = evaluate_bert_span(self.args, model, self.valid_iter, self.logger)
-                else:
-                    metrics = evaluate(self.args, model, self.valid_iter, self.logger)
+                metrics = evaluate(self.args, model, self.valid_iter, self.logger)
+
                 cur_valid_metric = metrics[self.valid_metric_name]
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric
@@ -313,11 +219,7 @@ class trainer(Trainer):
         model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
         model_file = os.path.join(
             self.save_dir, model_file_name)
-        model_to_save = (self.model.module if hasattr(self.model, "module") else self.model)
-        if "bert" in self.args.model_type:
-            model_to_save.save_pretrained(model_file)
-        else:
-            torch.save(model_to_save, model_file)
+        torch.save(self.model.state_dict(), model_file)
         self.logger.info("Saved model state to '{}'".format(model_file))
 
         train_file_name = "state_epoch_{}.train".format(self.epoch) if save_mode == "all" else "state.train"
@@ -343,13 +245,9 @@ class trainer(Trainer):
                     best_model_file, self.valid_metric_name.upper(), self.best_valid_metric))
 
     def load(self, model_file, train_file):
-        if "bert" in self.args.model_type:
-            self.model = self.model.from_pretrained(model_file)
-        else:
-            model_state_dict = torch.load(
-                model_file, map_location=lambda storage, loc: storage)
-            self.model.load_state_dict(model_state_dict)
-
+        model_state_dict = torch.load(
+            model_file, map_location=lambda storage, loc: storage)
+        self.model.load_state_dict(model_state_dict)
         self.logger.info("Loaded model state from '{}'".format(model_file))
 
         train_state_dict = torch.load(
@@ -404,112 +302,9 @@ def evaluate(args, model, valid_dataset, logger):
                     else:
                         temp_2.append(tags[i][j])
 
-    # # 其他评估
-    # metrics = Metrics(labels, preds)
-    # metrics.report_scores()
-    # # metrics.report_confusion_matrix()
-    # results = {"f1": metrics.avg_metrics['f1_score'], "acc": metrics.precision_scores}
-    # results.update({"loss": eval_loss})
-    # return results
-
     # seqeval评估
     metrics = cal_performance(preds, labels)
     metrics.update({"loss": eval_loss})
     for key in sorted(metrics.keys()):
         logger.info("  %s = %s", key.upper(), str(metrics[key]))
     return metrics
-
-
-def evaluate_bert_normal(args, model, valid_dataset, logger):
-    eval_loss = 0.0
-    nb_eval_steps = 0
-    labels, preds = [], []
-    for step, batch in enumerate(valid_dataset):
-        model.eval()
-        batch = tuple(t.to(args.device) for t in batch)
-        with torch.no_grad():
-            inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
-            if args.model_type != "distilbert":
-                # XLM and RoBERTa don"t use segment_ids
-                inputs["token_type_ids"] = (batch[2] if args.model_type in ["bert", "xlnet"] else None)
-            outputs = model(**inputs)
-        tmp_eval_loss, logits = outputs[:2]
-        if args.n_gpu > 1:
-            tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
-        eval_loss += tmp_eval_loss.item()
-        nb_eval_steps += 1
-        if "crf" in args.model_type:
-            logger.info("Using CRF Evaluation")
-            tags = model.crf.decode(logits, inputs['attention_mask'])
-            pred = tags.squeeze(0).cpu().numpy().tolist()
-        else:
-            pred = np.argmax(logits.cpu().numpy(), axis=2).tolist()
-        out_label_ids = inputs['labels'].cpu().numpy().tolist()
-        for i, label in enumerate(out_label_ids):
-            temp_1, temp_2 = [], []
-            for j, m in enumerate(label):
-                if j == 0:
-                    continue
-                elif out_label_ids[i][j] == args.label2id[constants.SEP]:
-                    labels.append(temp_1)
-                    preds.append(temp_2)
-                    break
-                else:
-                    temp_1.append(args.id2label[out_label_ids[i][j]])
-                    temp_2.append(args.id2label[pred[i][j]])
-
-    ## 其他评估
-    # metrics = Metrics(labels, preds)
-    # metrics.report_scores()
-    # # metrics.report_confusion_matrix()
-    # results = {"f1": metrics.avg_metrics['f1_score'], "acc": metrics.precision_scores}
-    # results.update({"loss": eval_loss})
-    # return results
-
-    # seqeval评估
-    metrics = cal_performance(preds, labels)
-    metrics.update({"loss": eval_loss})
-    for key in sorted(metrics.keys()):
-        logger.info("  %s = %s", key.upper(), str(metrics[key]))
-    return metrics
-
-
-# TODO 评估需要处理
-def evaluate_bert_span(args, model, eval_features, logger):
-
-    metric = SpanEntityScore(args.id2label)
-    # Eval!
-    eval_loss, nb_eval_steps = 0.0, 0
-    for step, f in enumerate(eval_features):
-        input_lens = f.input_len
-        input_ids = torch.tensor([f.input_ids[:input_lens]], dtype=torch.long).to(args.device)
-        input_mask = torch.tensor([f.input_mask[:input_lens]], dtype=torch.long).to(args.device)
-        segment_ids = torch.tensor([f.segment_ids[:input_lens]], dtype=torch.long).to(args.device)
-        start_ids = torch.tensor([f.start_ids[:input_lens]], dtype=torch.long).to(args.device)
-        end_ids = torch.tensor([f.end_ids[:input_lens]], dtype=torch.long).to(args.device)
-        subjects = f.subjects
-        model.eval()
-        with torch.no_grad():
-            inputs = {"input_ids": input_ids, "attention_mask": input_mask,
-                      "start_positions": start_ids, "end_positions": end_ids}
-            if args.model_type != "distilbert":
-                # XLM and RoBERTa don"t use segment_ids
-                inputs["token_type_ids"] = (segment_ids if args.model_type in ["bert", "xlnet"] else None)
-            outputs = model(**inputs)
-        tmp_eval_loss, start_logits, end_logits = outputs[:3]
-        R = bert_extract_item(start_logits, end_logits)
-        T = subjects
-        metric.update(true_subject=T, pred_subject=R)
-        if args.n_gpu > 1:
-            tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
-        eval_loss += tmp_eval_loss.item()
-        nb_eval_steps += 1
-
-    eval_loss = eval_loss / nb_eval_steps
-    eval_info, entity_info = metric.result()
-    results = {f'{key}': value for key, value in eval_info.items()}
-    results['loss'] = eval_loss
-
-    for key in sorted(results.keys()):
-        logger.info("  %s = %s", key.upper(), str(results[key]))
-    return results

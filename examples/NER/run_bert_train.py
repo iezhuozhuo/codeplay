@@ -68,6 +68,7 @@ def main():
                                                 )
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool(".ckpt" in args.model_name_or_path),
                                         config=config, cache_dir=args.cache_dir if args.cache_dir else None,)
+    model.to(args.device)
 
     logger.info("Training/evaluation parameters %s", args)
     collate_fn = collate_fn_normal if "span" not in args.model_type else collate_fn_span
@@ -166,9 +167,9 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    from transformers import AutoTokenizer, AutoModelWithLMHead
-
-    # tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
-    config = BertConfig.from_pretrained("bert-base-chinese")
-    # print(config)
+    main()
+    # from transformers import AutoTokenizer, AutoModelWithLMHead
+    #
+    # # tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
+    # config = BertConfig.from_pretrained("bert-base-chinese")
+    # # print(config)

@@ -59,7 +59,7 @@ def BasicConfig():
         "--model_type",
         default=None,
         type=str,
-        required=True,
+        # required=True,
     )
     parser.add_argument(
         "--output_dir",
