@@ -134,7 +134,7 @@ def BasicConfig():
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
 
     # Multi-GPU
-    parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
+    parser.add_argument("--seed", type=int, default=1234, help="random seed for initialization")
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
     parser.add_argument(
         "--gradient_accumulation_steps",

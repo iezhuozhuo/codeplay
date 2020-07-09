@@ -57,7 +57,7 @@ class InputFeatures(object):
 class SummaGenCorpus(object):
     def __init__(self,
                  args,
-                 max_vocab_size=50000,
+                 max_vocab_size=14000,
                  min_freq=1,
                  specials=None, share_vocab=True):
         super(SummaGenCorpus, self).__init__()
@@ -95,8 +95,9 @@ class SummaGenCorpus(object):
         logger.info("Reading Data ...")
         data_raw = self.read_data(data_article_file, data_summary_file, data_type="train")
         random.shuffle(data_raw)
-        train_raw = data_raw[:int(len(data_raw) * 0.95)]
-        valid_raw = data_raw[int(len(data_raw) * 0.95):]
+        train_raw = data_raw[:int(len(data_raw) * 0.98)]
+        valid_raw = data_raw[int(len(data_raw) * 0.98):int(len(data_raw) * 0.99)]
+        test_raw = data_raw[int(len(data_raw) * 0.99):]
         # train_raw = data_raw[:600_000]
         # valid_raw = data_raw[600_000:]
         # train_raw = data_raw[:10_000]
@@ -108,11 +109,11 @@ class SummaGenCorpus(object):
 
         train_data = self.build_examples(train_raw, data_type="train")
         valid_data = self.build_examples(valid_raw, data_type="valid")
-        # test_data = self.build_examples(test_raw, data_type="test")
+        test_data = self.build_examples(test_raw, data_type="test")
 
         self.data = {"train": train_data,
                      "valid": valid_data,
-                     #"test": test_data
+                     "test": test_data
                      }
 
         logger.info("Saved article field to '{}'".format(self.field_article_file))
@@ -148,13 +149,16 @@ class SummaGenCorpus(object):
         f_summary = open(data_summary_file, 'r', encoding="utf-8")
         lines = []
         for i, (article, summary) in enumerate(zip(f_article, f_summary)):
-            if i % 10000 == 0:
-                logger.info("Read {} examples from {}".format(len(lines), data_type.upper()))
-            # if len(lines) >= 20000:
-            #     break
-            article_tokens = self.tokenizer(article)
-            summary_tokens = self.tokenizer(summary)
-            lines.append({"article": " ".join(article_tokens), "summary": " ".join(summary_tokens)})
+            if i < 1024:
+                if i % 10000 == 0:
+                    logger.info("Read {} examples from {}".format(len(lines), data_type.upper()))
+                # if len(lines) >= 20000:
+                #     break
+                article_tokens = self.tokenizer(article)
+                summary_tokens = self.tokenizer(summary)
+                lines.append({"article": " ".join(article_tokens), "summary": " ".join(summary_tokens)})
+            else:
+                continue
         logger.info("Read total {} examples from {}".format(len(lines), data_type.upper()))
         f_article.close()
         f_summary.close()
@@ -182,6 +186,11 @@ class SummaGenCorpus(object):
             len_seq_enc.append(len(article_words))
             len_seq_dec.append(len(summary_words))
 
+            # process the encoder inputs
+            if len(article_words) > self.args.max_enc_seq_length:
+                article_words = article_words[:self.args.max_enc_seq_length]
+            article_len = len(article_words)
+
             article_ids, summary_ids = [], []
             for i, word in enumerate(article_words):
                 article_ids.append(self.field["article"].stoi.get(word, self.field["article"].stoi.get(constants.UNK_WORD)))
@@ -189,9 +198,10 @@ class SummaGenCorpus(object):
                 summary_ids.append(self.field["summary"].stoi.get(word, self.field["summary"].stoi.get(constants.UNK_WORD)))
 
             # process the encoder inputs
-            if len(article_ids) > self.args.max_enc_seq_length:
-                article_ids = article_ids[:self.args.max_enc_seq_length]
-            article_len = len(article_ids)
+            # if len(article_ids) > self.args.max_enc_seq_length:
+            #     article_ids = article_ids[:self.args.max_enc_seq_length]
+            # article_len = len(article_ids)
+
             # article_ids += [self.field["article"].stoi[constants.BOS_WORD]]
             # article_ids = [self.field["article"].stoi[constants.EOS_WORD]] + article_ids
 
@@ -302,24 +312,33 @@ class SummaGenCorpus(object):
         prepared_data_file = data_file or self.data_file
         logger.info("Loading prepared data from {} ...".format(prepared_data_file))
         self.data = torch.load(prepared_data_file)
-        logger.info("Number of examples:",
-              " ".join("{}-{}".format(k.upper(), len(v)) for k, v in self.data.items()))
+        # logger.info("Number of examples:",
+        #       " ".join("{}-{}".format(k.upper(), len(v)) for k, v in self.data.items()))
 
     def load_field(self):
-        text_field = torch.load(self.field_text_file)
-        self.field["text"].load(text_field)
+        text_field = torch.load(self.field_article_file)
+        self.field["article"].load(text_field)
 
-        label_field = torch.load(self.field_label_file)
-        self.field["label"].load(label_field)
+        label_field = torch.load(self.field_summary_file)
+        self.field["summary"].load(label_field)
 
     def create_batch(self, data_type="train"):
         # TODO check example num
         # examples = self.data[data_type][0:1024]
         examples = self.data[data_type]
-        all_inputs_id = torch.tensor([f[0] for f in examples], dtype=torch.long)
-        all_inputs_label = torch.tensor([f[1] for f in examples], dtype=torch.long)
-        all_inputs_len = torch.tensor([f[2] for f in examples], dtype=torch.long)
-        dataset = TensorDataset(all_inputs_id, all_inputs_label, all_inputs_len)
+
+        article_ids = torch.tensor([f.article_ids for f in examples], dtype=torch.long)
+        article_mask = torch.tensor([f.article_mask for f in examples], dtype=torch.long)
+        article_len = torch.tensor([f.article_len for f in examples], dtype=torch.long)
+        summary_input_ids = torch.tensor([f.summary_input_ids for f in examples], dtype=torch.long)
+        summary_taget_ids = torch.tensor([f.summary_taget_ids for f in examples], dtype=torch.long)
+        summary_len = torch.tensor([f.summary_len for f in examples], dtype=torch.long)
+        summary_mask = torch.tensor([f.summary_mask for f in examples], dtype=torch.long)
+        article_ids_extend_vocab = torch.tensor([f.article_ids_extend_vocab for f in examples], dtype=torch.long)
+        extra_zeros = torch.tensor([f.extra_zeros for f in examples], dtype=torch.long)
+
+
+        dataset = TensorDataset(article_ids, article_mask, article_len, summary_input_ids, summary_taget_ids, summary_len, summary_mask, article_ids_extend_vocab,extra_zeros)
 
         if data_type == "train":
             train_sampler = RandomSampler(dataset) if self.args.local_rank == -1 else DistributedSampler(dataset)

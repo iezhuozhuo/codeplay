@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
-from Metrics import cal_performance
+from torch.autograd import Variable
 
 from source.utils.engine import Trainer
 
@@ -113,64 +113,78 @@ class trainer(Trainer):
         tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-            batch = tuple(t.to(self.args.device) for t in batch)
-            outputs = self.model(batch)
-            loss = outputs[0]
+            #batch = tuple(t.to(self.args.device) for t in batch)
+            c_t_1 = Variable(torch.zeros((self.args.train_batch_size, 2 * self.args.hidden_size))).to(self.args.device)
+            coverage = Variable(torch.zeros(batch[0].size())).to(self.args.device)
 
-            if self.args.n_gpu > 1:
-                loss = loss.mean()  # mean() to average on multi-gpu.
-            if self.args.gradient_accumulation_steps > 1:
-                loss = loss / self.args.gradient_accumulation_steps
+            enc_batch = batch[0].to(self.args.device)
+            enc_padding_mask = batch[1].to(self.args.device)
+            enc_lens = batch[2].to(self.args.device)
+            enc_batch_extend_vocab = batch[7].to(self.args.device)
+            extra_zeros = batch[8].to(self.args.device)
+            dec_batch = batch[3].to(self.args.device)
+            dec_padding_mask = batch[6].to(self.args.device)
+            max_dec_len = batch[5].to(self.args.device)
+            target_batch = batch[4].to(self.args.device)
 
-            if self.args.fp16:
-                try:
-                    from apex import amp
-                except ImportError:
-                    raise ImportError(
-                        "Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                    scaled_loss.backward()
-                if self.grad_clip:
-                    torch.nn.utils.clip_grad_norm_(amp.master_params(self.optimizer), self.grad_clip)
-            else:
-                loss.backward()
-                if self.grad_clip:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+            outputs = self.model(enc_batch, enc_lens, dec_batch, enc_padding_mask, c_t_1,
+                                 extra_zeros, enc_batch_extend_vocab, coverage, target_batch, max_dec_len, dec_padding_mask)
+            # loss = outputs[0]
+            #
+            # if self.args.n_gpu > 1:
+            #     loss = loss.mean()  # mean() to average on multi-gpu.
+            # if self.args.gradient_accumulation_steps > 1:
+            #     loss = loss / self.args.gradient_accumulation_steps
+            #
+            # if self.args.fp16:
+            #     try:
+            #         from apex import amp
+            #     except ImportError:
+            #         raise ImportError(
+            #             "Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
+            #     with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+            #         scaled_loss.backward()
+            #     if self.grad_clip:
+            #         torch.nn.utils.clip_grad_norm_(amp.master_params(self.optimizer), self.grad_clip)
+            # else:
+            #     loss.backward()
+            #     if self.grad_clip:
+            #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+            #
+            # tr_loss += loss.item()
+            #
+            # if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
+            #     self.optimizer.step()
+            #     if self.lr_scheduler is not None:
+            #         self.lr_scheduler.step()  # Update learning rate schedule
+            #     self.model.zero_grad()
+            #     self.global_step += 1
+            #
+            # if self.global_step % self.log_steps == 0:
+            #     # logging_loss = tr_loss / self.global_step
+            #     self.logger.info("the current train_steps is {}".format(self.global_step))
+            #     self.logger.info("the current logging_loss is {}".format(loss.item()))
 
-            tr_loss += loss.item()
+            # if self.global_step % self.valid_steps == 0:
+            #     self.logger.info(self.valid_start_message)
+            #
+            #     if isinstance(self.model, torch.nn.DataParallel):
+            #         model = self.model.module
+            #     else:
+            #         model = self.model
+            #     model.to(self.args.device)
 
-            if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
-                self.optimizer.step()
-                if self.lr_scheduler is not None:
-                    self.lr_scheduler.step()  # Update learning rate schedule
-                self.model.zero_grad()
-                self.global_step += 1
+                #metrics = evaluate(self.args, model, self.valid_iter, self.logger)
 
-            if self.global_step % self.log_steps == 0:
-                # logging_loss = tr_loss / self.global_step
-                self.logger.info("the current train_steps is {}".format(self.global_step))
-                self.logger.info("the current logging_loss is {}".format(loss.item()))
-
-            if self.global_step % self.valid_steps == 0:
-                self.logger.info(self.valid_start_message)
-
-                if isinstance(self.model, torch.nn.DataParallel):
-                    model = self.model.module
-                else:
-                    model = self.model
-                model.to(self.args.device)
-
-                metrics = evaluate(self.args, model, self.valid_iter, self.logger)
-
-                cur_valid_metric = metrics[self.valid_metric_name]
-                if self.is_decreased_valid_metric:
-                    is_best = cur_valid_metric < self.best_valid_metric
-                else:
-                    is_best = cur_valid_metric > self.best_valid_metric
-                if is_best:
-                    self.best_valid_metric = cur_valid_metric
-                self.save(is_best)
-                self.logger.info("-" * 85 + "\n")
+                #cur_valid_metric = metrics[self.valid_metric_name]
+                # if self.is_decreased_valid_metric:
+                #     is_best = cur_valid_metric < self.best_valid_metric
+                # else:
+                #     is_best = cur_valid_metric > self.best_valid_metric
+                # if is_best:
+                #     self.best_valid_metric = cur_valid_metric
+                # self.save(is_best)
+                # self.logger.info("-" * 85 + "\n")
 
     def train(self):
         if self.args.max_steps > 0:
@@ -264,47 +278,47 @@ class trainer(Trainer):
                 train_file, self.epoch, self.best_valid_metric))
 
 
-def evaluate(args, model, valid_dataset, logger):
-    eval_loss, nb_eval_steps = 0.0, 0
-    labels, preds = [], []
-    model.eval()
-    for batch in valid_dataset:
-        inputs_id, inputs_label, inputs_len = tuple(t.to(args.device) for t in batch)
-        with torch.no_grad():
-            tmp_eval_loss, logits = model(inputs=(inputs_id, inputs_len), labels=inputs_label)
-
-            if getattr(args, "optimized"):
-                pred = model.crf.decode(logits)
-                tags = pred.squeeze(0).cpu().numpy().tolist()
-            else:
-                tags, _ = model.crf._obtain_labels(logits, args.id2label, inputs_len)
-
-            if args.n_gpu > 1:
-                tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
-
-            eval_loss += tmp_eval_loss.item()
-        nb_eval_steps += 1
-
-        out_label_ids = inputs_label.cpu().numpy().tolist()
-        for i, label in enumerate(out_label_ids):
-            temp_1, temp_2 = [], []
-            for j, m in enumerate(label):
-                if j == 0:
-                    continue
-                elif out_label_ids[i][j] == args.label2id[constants.SEP]:
-                    labels.append(temp_1)
-                    preds.append(temp_2)
-                    break
-                else:
-                    temp_1.append(args.id2label[out_label_ids[i][j]])
-                    if args.optimized:
-                        temp_2.append(args.id2label[tags[i][j]])
-                    else:
-                        temp_2.append(tags[i][j])
+# def evaluate(args, model, valid_dataset, logger):
+#     eval_loss, nb_eval_steps = 0.0, 0
+#     labels, preds = [], []
+#     model.eval()
+#     for batch in valid_dataset:
+#         inputs_id, inputs_label, inputs_len = tuple(t.to(args.device) for t in batch)
+#         with torch.no_grad():
+#             tmp_eval_loss, logits = model(inputs=(inputs_id, inputs_len), labels=inputs_label)
+#
+#             if getattr(args, "optimized"):
+#                 pred = model.crf.decode(logits)
+#                 tags = pred.squeeze(0).cpu().numpy().tolist()
+#             else:
+#                 tags, _ = model.crf._obtain_labels(logits, args.id2label, inputs_len)
+#
+#             if args.n_gpu > 1:
+#                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
+#
+#             eval_loss += tmp_eval_loss.item()
+#         nb_eval_steps += 1
+#
+#         out_label_ids = inputs_label.cpu().numpy().tolist()
+#         for i, label in enumerate(out_label_ids):
+#             temp_1, temp_2 = [], []
+#             for j, m in enumerate(label):
+#                 if j == 0:
+#                     continue
+#                 elif out_label_ids[i][j] == args.label2id[constants.SEP]:
+#                     labels.append(temp_1)
+#                     preds.append(temp_2)
+#                     break
+#                 else:
+#                     temp_1.append(args.id2label[out_label_ids[i][j]])
+#                     if args.optimized:
+#                         temp_2.append(args.id2label[tags[i][j]])
+#                     else:
+#                         temp_2.append(tags[i][j])
 
     # seqeval评估
-    metrics = cal_performance(preds, labels)
-    metrics.update({"loss": eval_loss})
-    for key in sorted(metrics.keys()):
-        logger.info("  %s = %s", key.upper(), str(metrics[key]))
-    return metrics
+    # metrics = cal_performance(preds, labels)
+    # metrics.update({"loss": eval_loss})
+    # for key in sorted(metrics.keys()):
+    #     logger.info("  %s = %s", key.upper(), str(metrics[key]))
+    # return #metrics
