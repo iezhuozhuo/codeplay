@@ -5,9 +5,10 @@ import torch.nn.functional as F
 
 from source.modules.embedder import Embedder
 from source.modules.encoders.rnn_encoder import LSTMEncoder, RNNEncoder
-
+from source.modules.attention import PointerAttention
 trunc_norm_init_std = 1e-4
 rand_unif_init_mag = 0.02
+
 
 def init_wt_normal(wt):
     wt.data.normal_(std=trunc_norm_init_std)
@@ -26,10 +27,13 @@ def init_lstm_wt(lstm):
                 start, end = n // 4, n // 2
                 bias.data.fill_(0.)
                 bias.data[start:end].fill_(1.)
+
+
 def init_linear_wt(linear):
     linear.weight.data.normal_(std=trunc_norm_init_std)
     if linear.bias is not None:
         linear.bias.data.normal_(std=trunc_norm_init_std)
+
 
 class ReduceState(nn.Module):
     def __init__(self, hidden_size):
@@ -49,49 +53,6 @@ class ReduceState(nn.Module):
 
         return (hidden_reduced_h.unsqueeze(0), hidden_reduced_c.unsqueeze(0))  # h, c dim = [1, batch, hidden_dim]
 
-class Attention(nn.Module):
-    def __init__(self, hidden_size, is_coverage=True):
-        super(Attention, self).__init__()
-        self.hidden_size = hidden_size
-        self.is_coverage = is_coverage
-        # attention
-        if self.is_coverage:
-            self.W_c = nn.Linear(1, self.hidden_size * 2, bias=False)
-        self.decode_proj = nn.Linear(self.hidden_size * 2, self.hidden_size * 2)
-        self.v = nn.Linear(self.hidden_size * 2, 1, bias=False)
-
-    def forward(self, s_t_hat, encoder_outputs, encoder_feature, enc_padding_mask, coverage):
-        b, t_k, n = list(encoder_outputs.size())
-
-        dec_fea = self.decode_proj(s_t_hat)               # B x 2*hid_dim
-        dec_fea_expanded = dec_fea.unsqueeze(1).expand(b, t_k, n).contiguous() # B x t_k x 2*hid_dim
-        dec_fea_expanded = dec_fea_expanded.view(-1, n)   # B * t_k x 2*hid_dim
-
-        att_features = encoder_feature + dec_fea_expanded # B * t_k x 2*hidden_dim
-        if self.is_coverage:
-            coverage_input = coverage.view(-1, 1)         # B * t_k x 1
-            coverage_feature = self.W_c(coverage_input)   # B * t_k x 2*hidden_dim
-            att_features = att_features + coverage_feature
-
-        e = torch.tanh(att_features)   # B * t_k x 2*hidden_dim
-        scores = self.v(e)             # B * t_k x 1
-        scores = scores.view(-1, t_k)  # B x t_k
-
-        attn_dist_ = F.softmax(scores, dim=1)*enc_padding_mask # B x t_k
-        normalization_factor = attn_dist_.sum(1, keepdim=True)
-        attn_dist = attn_dist_ / normalization_factor
-
-        attn_dist = attn_dist.unsqueeze(1)           # B x 1 x t_k
-        c_t = torch.bmm(attn_dist, encoder_outputs)  # B x 1 x n
-        c_t = c_t.view(-1, self.hidden_size * 2)    # B x 2*hidden_dim
-
-        attn_dist = attn_dist.view(-1, t_k)          # B x t_k
-
-        if self.is_coverage:
-            coverage = coverage.view(-1, t_k)
-            coverage = coverage + attn_dist
-
-        return c_t, attn_dist, coverage
 
 class Decoder(nn.Module):
     def __init__(self,
@@ -114,7 +75,7 @@ class Decoder(nn.Module):
         self.pointer_gen = pointer_gen
         self.vocab_size = vocab_size
 
-        self.attention_network = Attention(self.hidden_size)
+        self.attention_network = PointerAttention(self.hidden_size)
         # decoder
         self.x_context = nn.Linear(self.hidden_size * 2 + self.input_size, self.input_size)
 
@@ -182,9 +143,6 @@ class Decoder(nn.Module):
         return final_dist, s_t, c_t, attn_dist, p_gen, coverage
 
 
-
-
-
 class PointerNet(nn.Module):
     def __init__(self,
                  input_size,
@@ -212,7 +170,6 @@ class PointerNet(nn.Module):
         self.eps = 1e-12
         self.cov_loss_wt = 1.0
         self.is_coverage = True
-
 
         self.reduce_state = ReduceState(self.hidden_size)
         self.embedder = Embedder(num_embeddings=self.n_vocab,
@@ -243,7 +200,6 @@ class PointerNet(nn.Module):
                               num_layers=self.num_layers,
                               bidirectional=self.bidirectional,
                               dropout=self.dropout)
-
 
     def forward(self, enc_batch, enc_lens, dec_batch, enc_padding_mask, c_t_1,
                                  extra_zeros, enc_batch_extend_vocab, coverage, target_batch, max_dec_len, dec_padding_mask):

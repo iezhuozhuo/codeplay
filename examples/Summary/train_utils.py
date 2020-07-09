@@ -113,7 +113,7 @@ class trainer(Trainer):
         tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-            #batch = tuple(t.to(self.args.device) for t in batch)
+            # batch = tuple(t.to(self.args.device) for t in batch)
             c_t_1 = Variable(torch.zeros((self.args.train_batch_size, 2 * self.args.hidden_size))).to(self.args.device)
             coverage = Variable(torch.zeros(batch[0].size())).to(self.args.device)
 

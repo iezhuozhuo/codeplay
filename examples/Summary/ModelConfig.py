@@ -1,6 +1,7 @@
 # encoding utf-8
 from source.models.pointer_network import PointerNet
 
+
 def configs(parser):
     parser.add_argument("--max_enc_seq_length", type=int, default=128)
     parser.add_argument("--max_dec_seq_length", type=int, default=64)
@@ -25,15 +26,14 @@ def configs(parser):
     args, _ = parser.parse_known_args()
     return args
 
+
 def PointNetworkModel(args, embedded_pretrain=None, vocab_size=0, padding_idx=None):
-
-    model = PointerNet( input_size=args.embedded_size,
-                        hidden_size=args.hidden_size,
-                        n_vocab = vocab_size,
-                        embedded_pretrain = embedded_pretrain,
-                        num_layers = 1,
-                        bidirectional = True,
-                        dropout = 0.0,
-                        padding_idx = padding_idx)
-
+    model = PointerNet(input_size=args.embedded_size,
+                       hidden_size=args.hidden_size,
+                       n_vocab=vocab_size,
+                       embedded_pretrain=embedded_pretrain,
+                       num_layers=1,
+                       bidirectional=True,
+                       dropout=0.0,
+                       padding_idx=padding_idx)
     return model

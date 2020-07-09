@@ -20,6 +20,7 @@ MODEL_CLASSES = {
     "summagen": (PointNetworkModel, configs)
 }
 
+
 class AdagradCustom(Optimizer):
 
     def __init__(self, params, lr=1e-2, lr_decay=0, weight_decay=0, initial_accumulator_value=0):
@@ -83,6 +84,7 @@ class AdagradCustom(Optimizer):
 
         return loss
 
+
 def main():
     parser = BasicConfig()
     model_type = vars(parser.parse_known_args()[0])["model_type"].lower()
@@ -91,7 +93,6 @@ def main():
 
     args = checkoutput_and_setcuda(args)
     logger = init_logger(args)
-    logger.info(args)
 
     # Set seed
     set_seed(args)
@@ -100,14 +101,11 @@ def main():
     processor = SummaGenCorpus(args, specials=specials)
     padding_idx = processor.field["article"].stoi[constants.PAD_WORD]
 
-
     embedded_pretrain = None
-
 
     logger.info(args)
 
-
-    model = model_class(args, embedded_pretrain, processor.max_vocab_size, padding_idx)
+    model = model_class(args, embedded_pretrain, processor.field["article"].vocab_size, padding_idx)
     model.to(args.device)
 
     initial_lr = args.learning_rate
@@ -125,10 +123,6 @@ def main():
 
         args.logging_steps = len(train_dataloader) // args.gradient_accumulation_steps // 5
         args.valid_steps = len(train_dataloader)
-
-
-
-
 
         trainer_op = trainer(args=args,
                              model=model,

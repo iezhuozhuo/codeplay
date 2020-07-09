@@ -57,7 +57,7 @@ class InputFeatures(object):
 class SummaGenCorpus(object):
     def __init__(self,
                  args,
-                 max_vocab_size=14000,
+                 max_vocab_size=50000,
                  min_freq=1,
                  specials=None, share_vocab=True):
         super(SummaGenCorpus, self).__init__()
@@ -98,12 +98,8 @@ class SummaGenCorpus(object):
         train_raw = data_raw[:int(len(data_raw) * 0.98)]
         valid_raw = data_raw[int(len(data_raw) * 0.98):int(len(data_raw) * 0.99)]
         test_raw = data_raw[int(len(data_raw) * 0.99):]
-        # train_raw = data_raw[:600_000]
-        # valid_raw = data_raw[600_000:]
-        # train_raw = data_raw[:10_000]
-        # valid_raw = data_raw[10_000:]
-        # test_raw = train_raw[601_000:]
         logger.info("Build Vocab from {} and {} ...".format(data_article_file, data_summary_file))
+
         # 根据训练集来定制词表
         self.build_vocab(data_raw)
 
@@ -142,13 +138,14 @@ class SummaGenCorpus(object):
             data: 字典列表，每个字典由 article, summary
         """
         if not os.path.isfile(data_article_file) or not os.path.isfile(data_summary_file):
-            logger.info("{} data text and label can't find".format(data_type))
+            logger.info("{} data article and summary can't find".format(data_type))
             return None
 
         f_article = open(data_article_file, 'r', encoding="utf-8")
         f_summary = open(data_summary_file, 'r', encoding="utf-8")
         lines = []
         for i, (article, summary) in enumerate(zip(f_article, f_summary)):
+            # FIXME 全量数据
             if i < 1024:
                 if i % 10000 == 0:
                     logger.info("Read {} examples from {}".format(len(lines), data_type.upper()))
@@ -178,6 +175,7 @@ class SummaGenCorpus(object):
     def build_examples(self, data_raw, data_type="train"):
         if data_raw == None:
             logger.info("{} data text and label can't find".format(data_type))
+
         examples, len_seq_enc, len_seq_dec, len_article_oov = [], [], [], []
         desc_message = "GETDATA FROM " + data_type.upper()
         for data in tqdm(data_raw, desc=desc_message):
@@ -197,14 +195,6 @@ class SummaGenCorpus(object):
             for i, word in enumerate(summary_words):
                 summary_ids.append(self.field["summary"].stoi.get(word, self.field["summary"].stoi.get(constants.UNK_WORD)))
 
-            # process the encoder inputs
-            # if len(article_ids) > self.args.max_enc_seq_length:
-            #     article_ids = article_ids[:self.args.max_enc_seq_length]
-            # article_len = len(article_ids)
-
-            # article_ids += [self.field["article"].stoi[constants.BOS_WORD]]
-            # article_ids = [self.field["article"].stoi[constants.EOS_WORD]] + article_ids
-
             summary_input_ids = [self.field["summary"].stoi[constants.BOS_WORD]] + summary_ids
             summary_taget_ids = summary_ids[:]
             if len(summary_input_ids) > self.args.max_dec_seq_length:
@@ -215,7 +205,6 @@ class SummaGenCorpus(object):
             assert len(summary_input_ids) == len(summary_taget_ids)
             summary_len = len(summary_input_ids)
 
-
             # 如果使用pointer-generator模式, 需要一些额外信息
             # 编码时需要输入原文编码和oov单词的编码
             article_ids_extend_vocab, article_oovs, extra_zeros = None, None, None
@@ -224,7 +213,8 @@ class SummaGenCorpus(object):
                 article_ids_extend_vocab, article_oovs = self.article2ids(article_words)
 
                 # 获取参考摘要的id，其中oov单词由原文中的oov单词编码表示
-                summary_ids_extend_vocab = self.abstract2ids(summary_words, article_oovs)
+                # summary_ids_extend_vocab
+                summary_ids_extend_vocab = self.summary2ids(summary_words, article_oovs)
                 summary_taget_ids = summary_ids_extend_vocab[:]
                 if len(summary_ids_extend_vocab) > self.args.max_dec_seq_length:
                     summary_ids_extend_vocab = summary_ids_extend_vocab[: self.args.max_dec_seq_length]  # 无结束标志
@@ -241,13 +231,13 @@ class SummaGenCorpus(object):
             padding_id = self.field["article"].stoi[constants.PAD_WORD]
             article_ids = self.padding_seq(article_ids, self.args.max_enc_seq_length, padding_id)
             article_mask = self.padding_seq(article_mask, self.args.max_enc_seq_length, padding_id)
-            # article_oovs = self.
+
             summary_input_ids = self.padding_seq(summary_input_ids, self.args.max_dec_seq_length, padding_id)
             summary_taget_ids = self.padding_seq(summary_taget_ids, self.args.max_dec_seq_length, padding_id)
             summary_mask = self.padding_seq(summary_mask, self.args.max_dec_seq_length, padding_id)
             if self.args.pointer_gen:
                 article_ids_extend_vocab = self.padding_seq(article_ids_extend_vocab, self.args.max_enc_seq_length, padding_id)
-                article_oovs = self.padding_seq(article_oovs, self.args.max_oov_len, padding_id)
+                # article_oovs = self.padding_seq(article_oovs, self.args.max_oov_len, padding_id)
 
             examples.append(InputFeatures(
                 article_ids=article_ids,
@@ -263,7 +253,7 @@ class SummaGenCorpus(object):
 
         len_seq_enc = np.array(len_seq_enc)
         len_seq_dec = np.array(len_seq_dec)
-        len_article_oov = np.array(len_article_oov) if len(len_article_oov) > 0 else None
+        len_article_oov = np.array(len_article_oov) if len(len_article_oov) > 0 else np.array([0])
         logger.info("encoder {} sequence length converge 95%".format(np.percentile(len_seq_enc, 95)))
         logger.info("decoder {} sequence length converge 95%".format(np.percentile(len_seq_dec, 95)))
         logger.info("len_article_oov max is {}".format(len_article_oov.max()))
@@ -273,7 +263,7 @@ class SummaGenCorpus(object):
         """返回两个列表：将文章的词汇转换为id,包含oov词汇id; oov词汇"""
         ids, oovs = [], []
         unk_id = self.field["article"].stoi[constants.UNK_WORD]
-        vocab_size = len(self.field["article"].stoi)
+        vocab_size = self.field["article"].vocab_size
         for word in article_words:
             i = self.field["article"].stoi.get(word, self.field["article"].stoi.get(constants.UNK_WORD))
             if i == unk_id:  # If w is OOV
@@ -286,11 +276,11 @@ class SummaGenCorpus(object):
                 ids.append(i)
         return ids, oovs
 
-    def abstract2ids(self, abstract_words, article_oovs):
+    def summary2ids(self, summary_words, article_oovs):
         ids = []
         unk_id = self.field["article"].stoi[constants.UNK_WORD]
-        vocab_size = len(self.field["summary"].stoi)
-        for word in abstract_words:
+        vocab_size = self.field["summary"].vocab_size
+        for word in summary_words:
             i = self.field["summary"].stoi.get(word, self.field["summary"].stoi.get(constants.UNK_WORD))
             if i == unk_id:  # If w is an OOV word
                 if word in article_oovs:  # If w is an in-article OOV
@@ -323,10 +313,9 @@ class SummaGenCorpus(object):
         self.field["summary"].load(label_field)
 
     def create_batch(self, data_type="train"):
-        # TODO check example num
+        # FIXME check example num
         # examples = self.data[data_type][0:1024]
         examples = self.data[data_type]
-
         article_ids = torch.tensor([f.article_ids for f in examples], dtype=torch.long)
         article_mask = torch.tensor([f.article_mask for f in examples], dtype=torch.long)
         article_len = torch.tensor([f.article_len for f in examples], dtype=torch.long)
@@ -336,7 +325,6 @@ class SummaGenCorpus(object):
         summary_mask = torch.tensor([f.summary_mask for f in examples], dtype=torch.long)
         article_ids_extend_vocab = torch.tensor([f.article_ids_extend_vocab for f in examples], dtype=torch.long)
         extra_zeros = torch.tensor([f.extra_zeros for f in examples], dtype=torch.long)
-
 
         dataset = TensorDataset(article_ids, article_mask, article_len, summary_input_ids, summary_taget_ids, summary_len, summary_mask, article_ids_extend_vocab,extra_zeros)
 

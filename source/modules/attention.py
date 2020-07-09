@@ -1,17 +1,12 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
-"""
-File: source/encoders/attention.py
-"""
+# @Time    : 2020/7/9 21:01
+# @Author  : zhuo & zdy
+# @github   : iezhuozhuo
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from source.utils.misc import sequence_mask
 
 
@@ -186,6 +181,7 @@ class MultiHeadAttention(nn.Module):
         return q, attn
 
 
+# TODO 重合可以删除
 class PositionwiseFeedForward(nn.Module):
     ''' A two-feed-forward-layer module '''
 
@@ -207,3 +203,49 @@ class PositionwiseFeedForward(nn.Module):
         x = self.layer_norm(x)
 
         return x
+
+
+class PointerAttention(nn.Module):
+    def __init__(self, hidden_size, is_coverage=True):
+        super(PointerAttention, self).__init__()
+
+        self.hidden_size = hidden_size
+        self.is_coverage = is_coverage
+        # attention
+        if self.is_coverage:
+            self.W_c = nn.Linear(1, self.hidden_size * 2, bias=False)
+        self.decode_proj = nn.Linear(self.hidden_size * 2, self.hidden_size * 2)
+        self.v = nn.Linear(self.hidden_size * 2, 1, bias=False)
+
+    def forward(self, s_t_hat, encoder_outputs, encoder_feature, encoder_mask, coverage):
+        bsz, seq, dim = list(encoder_outputs.size())
+
+        dec_fea = self.decode_proj(s_t_hat)  # B x 2*hid_dim
+        dec_fea_expanded = dec_fea.unsqueeze(1).expand(bsz, seq, dim).contiguous()  # B x seq x 2*hid_dim
+        dec_fea_expanded = dec_fea_expanded.view(-1, dim)  # B * seq x 2*hid_dim
+
+        att_features = encoder_feature + dec_fea_expanded  # B * seq x 2*hidden_dim
+        if self.is_coverage:
+            coverage_input = coverage.view(-1, 1)  # B * seq x 1
+            coverage_feature = self.W_c(coverage_input)  # B * seq x 2*hidden_dim
+            att_features = att_features + coverage_feature
+
+        e = torch.tanh(att_features)  # B * seq x 2*hidden_dim
+        scores = self.v(e)  # B * seq x 1
+        scores = scores.view(-1, seq)  # B x seq
+
+        attn_weight_ = F.softmax(scores, dim=1) * encoder_mask  # B x seq
+        normalization_factor = attn_weight_.sum(1, keepdim=True)
+        attn_weight = attn_weight_ / normalization_factor
+
+        attn_weight = attn_weight.unsqueeze(1)  # B x 1 x seq
+        h_context = torch.bmm(attn_weight, encoder_outputs)  # B x 1 x dim
+        h_context = h_context.view(-1, self.hidden_size * 2)  # B x 2*hidden_dim
+
+        attn_weight = attn_weight.view(-1, seq)  # B x seq
+
+        if self.is_coverage:
+            coverage = coverage.view(-1, seq)
+            coverage = coverage + attn_weight
+
+        return h_context, attn_weight, coverage

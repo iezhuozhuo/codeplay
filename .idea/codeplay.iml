@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
-    <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="Remote Python 3.7.7 (sftp://administrator4@10.108.103.170:22/home/administrator4/anaconda3/envs/danyang/bin/python3.7)" jdkType="Python SDK" />
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/examples/Summary" isTestSource="false" />
+    </content>
+    <orderEntry type="jdk" jdkName="Remote Python 3.7.7 (sftp://gong@10.112.251.61:22/home/gong/anaconda3/envs/zhuo-kdd/bin/python3.7)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
