@@ -1,13 +1,12 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
-"""
-File: source/decoders/state.py
-"""
+# @Time    : 2020/7/9 21:01
+# @Author  : zhuo & zdy
+# @github   : iezhuozhuo
+import  torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from source.modules.initial_weight import init_linear_wt
 
 
 class DecoderState(object):
@@ -108,3 +107,23 @@ class DecoderState(object):
             else:
                 kwargs[k] = self._inflate_tensor(v, times)
         return DecoderState(**kwargs)
+
+
+class ReduceState(nn.Module):
+    def __init__(self, hidden_size, bidirectional=True):
+        super(ReduceState, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_directions = 2 if bidirectional else 1
+        self.reduce_h = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size)
+        init_linear_wt(self.reduce_h)
+        self.reduce_c = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size)
+        init_linear_wt(self.reduce_c)
+
+    def forward(self, hidden):
+        h_in, c_in = hidden  # # [layer, batch, hidden_dim*2]
+
+        hidden_reduced_h = F.relu(self.reduce_h(h_in[-1]))  # [batch, hidden_dim]
+        hidden_reduced_c = F.relu(self.reduce_c(c_in[-1]))
+
+        return (hidden_reduced_h.unsqueeze(0), hidden_reduced_c.unsqueeze(0))  # h, c dim = [1, batch, hidden_dim]
+

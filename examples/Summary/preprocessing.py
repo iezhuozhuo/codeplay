@@ -131,6 +131,7 @@ class SummaGenCorpus(object):
         logger.info("Saved data to '{}'".format(self.data_file))
         torch.save(self.data, self.data_file)
 
+    @timer
     def read_data(self, data_article_file, data_summary_file, data_type="train"):
         """
         读取样本文件
@@ -146,16 +147,14 @@ class SummaGenCorpus(object):
         lines = []
         for i, (article, summary) in enumerate(zip(f_article, f_summary)):
             # FIXME 全量数据
-            if i < 1024:
-                if i % 10000 == 0:
-                    logger.info("Read {} examples from {}".format(len(lines), data_type.upper()))
-                # if len(lines) >= 20000:
-                #     break
-                article_tokens = self.tokenizer(article)
-                summary_tokens = self.tokenizer(summary)
-                lines.append({"article": " ".join(article_tokens), "summary": " ".join(summary_tokens)})
-            else:
-                continue
+            if i % 10000 == 0:
+                logger.info("Read {} examples from {}".format(len(lines), data_type.upper()))
+            # if len(lines) >= 20000:
+            #     break
+            article_tokens = self.tokenizer(article)
+            summary_tokens = self.tokenizer(summary)
+            lines.append({"article": " ".join(article_tokens), "summary": " ".join(summary_tokens)})
+
         logger.info("Read total {} examples from {}".format(len(lines), data_type.upper()))
         f_article.close()
         f_summary.close()
@@ -216,7 +215,7 @@ class SummaGenCorpus(object):
                 # summary_ids_extend_vocab
                 summary_ids_extend_vocab = self.summary2ids(summary_words, article_oovs)
                 summary_taget_ids = summary_ids_extend_vocab[:]
-                if len(summary_ids_extend_vocab) > self.args.max_dec_seq_length:
+                if len(summary_ids_extend_vocab) >= self.args.max_dec_seq_length:
                     summary_ids_extend_vocab = summary_ids_extend_vocab[: self.args.max_dec_seq_length]  # 无结束标志
                     summary_taget_ids = summary_taget_ids[: self.args.max_dec_seq_length]
                 else:
@@ -238,6 +237,13 @@ class SummaGenCorpus(object):
             if self.args.pointer_gen:
                 article_ids_extend_vocab = self.padding_seq(article_ids_extend_vocab, self.args.max_enc_seq_length, padding_id)
                 # article_oovs = self.padding_seq(article_oovs, self.args.max_oov_len, padding_id)
+
+            assert len(article_ids) == self.args.max_enc_seq_length
+            assert len(article_mask) == self.args.max_enc_seq_length
+            assert len(article_ids_extend_vocab) == self.args.max_enc_seq_length
+            assert len(summary_input_ids) == self.args.max_dec_seq_length
+            assert len(summary_taget_ids) == self.args.max_dec_seq_length
+            assert len(summary_mask) == self.args.max_dec_seq_length
 
             examples.append(InputFeatures(
                 article_ids=article_ids,
@@ -313,8 +319,6 @@ class SummaGenCorpus(object):
         self.field["summary"].load(label_field)
 
     def create_batch(self, data_type="train"):
-        # FIXME check example num
-        # examples = self.data[data_type][0:1024]
         examples = self.data[data_type]
         article_ids = torch.tensor([f.article_ids for f in examples], dtype=torch.long)
         article_mask = torch.tensor([f.article_mask for f in examples], dtype=torch.long)
@@ -326,7 +330,11 @@ class SummaGenCorpus(object):
         article_ids_extend_vocab = torch.tensor([f.article_ids_extend_vocab for f in examples], dtype=torch.long)
         extra_zeros = torch.tensor([f.extra_zeros for f in examples], dtype=torch.long)
 
-        dataset = TensorDataset(article_ids, article_mask, article_len, summary_input_ids, summary_taget_ids, summary_len, summary_mask, article_ids_extend_vocab,extra_zeros)
+        dataset = TensorDataset(
+            article_ids, article_len, article_mask, article_ids_extend_vocab,
+            summary_input_ids, summary_taget_ids, summary_len, summary_mask,
+            extra_zeros
+        )
 
         if data_type == "train":
             train_sampler = RandomSampler(dataset) if self.args.local_rank == -1 else DistributedSampler(dataset)

@@ -87,7 +87,7 @@ class TextRNN(nn.Module):
         if embedded_pretrain is not None:
             self.embedder.load_embeddings(embedded_pretrain)
 
-        # TODO get different rnn type using rnn_type
+        # get different rnn type using rnn_type  using new GRU or LSTM
         self.rnn_encoder = RNNEncoder(input_size=self.input_size,
                                       hidden_size=self.hidden_size,
                                       embedder=self.embedder,
@@ -221,7 +221,7 @@ class TransformerClassifier(nn.Module):
                 attention_mask=None,
                 output_attentions=False):
         outputs = self.embedded_position(self.embedder(inputs[0]))
-        # TODO 如果是多层  第一层hidden_size != embeded_size 就会麻烦
+        # 第一层hidden_size != embeded_size 就会麻烦
         for enc_layer in self.layer_stack:
             outputs, weights = enc_layer(outputs, attention_mask=attention_mask, output_attentions=output_attentions)
 

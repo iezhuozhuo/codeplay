@@ -107,7 +107,7 @@ class BertFashionLayer(nn.Module):
         )
         attention_output = self.output(self_outputs[0], hidden_states)
 
-        # TODO output layer循环输出的问题 output_attentions=false
+        # output layer循环输出的问题 output_attentions=false
         if output_attentions:
             return attention_output, self_outputs[1:]  # add attentions if we output them
         else:

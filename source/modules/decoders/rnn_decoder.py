@@ -10,8 +10,9 @@ File: source/decoders/rnn_decoder.py
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from source.modules.attention import Attention
+from source.modules.attention import Attention, PointerAttention
 from source.modules.decoders.state import DecoderState
 from source.utils.misc import Pack
 from source.utils.misc import sequence_mask
@@ -185,3 +186,106 @@ class RNNDecoder(nn.Module):
 
         log_probs = self.output_layer(out_inputs)
         return log_probs, state
+
+
+class PointerDecoder(nn.Module):
+    def __init__(self,
+                 input_size,
+                 hidden_size,
+                 vocab_size,
+                 embedder=None,
+                 num_layers=1,
+                 dropout=0.0,
+                 pointer_gen=True):
+        super(PointerDecoder, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.embedder = embedder
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.pointer_gen = pointer_gen
+        self.vocab_size = vocab_size
+
+        self.attention_network = PointerAttention(self.hidden_size)
+
+        # [input_embed, c_context]
+        self.x_context = nn.Linear(self.hidden_size * 2 + self.input_size, self.input_size)
+
+        self.lstm = nn.LSTM(self.input_size, self.hidden_size, num_layers=1, batch_first=True, bidirectional=False)
+        # init_lstm_wt(self.lstm)
+
+        if self.pointer_gen:
+            self.p_gen_linear = nn.Linear(self.hidden_size * 4 + self.input_size, 1)
+
+        # p_vocab
+        self.out1 = nn.Linear(self.hidden_size * 3, self.hidden_size)
+        self.out2 = nn.Linear(self.hidden_size, self.vocab_size)
+
+    def forward(self, y_t, s_t_pre, encoder_outputs, encoder_feature, enc_padding_mask,
+                h_context_pre, extra_zeros, article_ids_extend_vocab, coverage, step):
+        """
+        :param y_t: 每一时间步输入 id
+        :param s_t_pre: LSTM 上一个时间步的隐状态包含 c,h
+        :param encoder_outputs: 编码器的隐状态
+        :param encoder_feature: 编码器的线型变换 W_h * h
+        :param enc_padding_mask: 编码器的 mask
+        :param c_context_pre: 上一个时间步的上下文向量 c_context
+        :param extra_zeros:
+        :param article_ids_extend_vocab: 虽然不在 article+summary 上的词表中，但是在 article 的原文中，oov可以copy[oov使用n_vocab+idx表示]
+        :param coverage: coverage mechanism 防止 Repitition 类似机翻中解决过翻译/漏翻译 当前步所有 attention_weight 和 coverage_pre加和
+        :param step: 译码时间步
+        :return:
+        """
+
+        if not self.training and step == 0:
+            h_decoder, c_decoder = s_t_pre
+            s_t_hat = torch.cat((h_decoder.view(-1, self.hidden_size),
+                                 c_decoder.view(-1, self.hidden_size)), 1)  # B x 2*hidden_dim
+            # attention return h_context, attn_weight, coverage
+            h_context, _, coverage_next = self.attention_network(s_t_hat, encoder_outputs, encoder_feature,
+                                                           enc_padding_mask, coverage)
+            coverage = coverage_next
+
+        y_t_embd = self.embedder(y_t)
+        x = self.x_context(torch.cat((h_context_pre, y_t_embd), 1))
+        self.lstm.flatten_parameters()
+        lstm_out, s_t = self.lstm(x.unsqueeze(1), s_t_pre)
+
+        h_decoder, c_decoder = s_t
+        s_t_hat = torch.cat((h_decoder.view(-1, self.hidden_size),
+                             c_decoder.view(-1, self.hidden_size)), 1)  # B x 2*hidden_dim
+        h_context, attn_weight, coverage_next = self.attention_network(
+            s_t_hat, encoder_outputs, encoder_feature, enc_padding_mask, coverage)
+
+        if self.training or step > 0:
+            coverage = coverage_next
+
+        p_gen = None
+        if self.pointer_gen:
+            # p_gen = sigmoid(W_h*h_context + W_s*s + W_x*x)
+            p_gen_input = torch.cat((h_context, s_t_hat, x), 1)  # B x (2*2*hidden_dim + emb_dim)
+            p_gen = self.p_gen_linear(p_gen_input)
+            p_gen = torch.sigmoid(p_gen)
+
+        output = torch.cat((lstm_out.view(-1, self.hidden_size), h_context), 1) # B x hidden_dim * 3
+        output = self.out1(output) # B x hidden_dim
+
+        #output = F.relu(output)
+
+        output = self.out2(output) # B x vocab_size
+        vocab_dist = F.softmax(output, dim=1)
+
+        if self.pointer_gen:
+            vocab_dist_ = p_gen * vocab_dist
+            attn_dist_ = (1 - p_gen) * attn_weight
+
+            if extra_zeros is not None:
+                vocab_dist_ = torch.cat([vocab_dist_, extra_zeros.float()], 1)
+            article_ids_extend_vocab_ = article_ids_extend_vocab.index_select(1, torch.arange(0, attn_dist_.size(1), dtype=int).to(article_ids_extend_vocab.device))
+            # 把得到的单词分布加到对应的位置上 article_ids_extend_vocab知道word_index
+            final_dist = vocab_dist_.scatter_add(1, article_ids_extend_vocab_, attn_dist_)
+        else:
+            final_dist = vocab_dist
+
+        return final_dist, s_t, h_context, attn_weight, p_gen, coverage

@@ -15,29 +15,138 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import pad_packed_sequence
 
-rand_unif_init_mag = 0.02
-def init_lstm_wt(lstm):
-    for names in lstm._all_weights:
-        for name in names:
-            if name.startswith('weight_'):
-                wt = getattr(lstm, name)
-                wt.data.uniform_(-rand_unif_init_mag, rand_unif_init_mag)
-            elif name.startswith('bias_'):
-                # set forget bias to 1
-                bias = getattr(lstm, name)
-                n = bias.size(0)
-                start, end = n // 4, n // 2
-                bias.data.fill_(0.)
-                bias.data[start:end].fill_(1.)
-
-
-
+from source.modules.initial_weight import init_rnn_wt
 
 
 class LSTMEncoder(nn.Module):
     """
+    A LSTM recurrent neural network encoder.
+    """
+
+    def __init__(self,
+                 input_size,
+                 hidden_size,
+                 rnn_hidden_size=None,
+                 embedder=None,
+                 num_layers=1,
+                 bidirectional=True,
+                 dropout=0.0,
+                 output_type="seq2seq"):
+        super(LSTMEncoder, self).__init__()
+
+        self.num_directions = 2 if bidirectional else 1
+        if not rnn_hidden_size:
+            assert hidden_size % self.num_directions == 0
+        else:
+            assert rnn_hidden_size == hidden_size
+        self.rnn_hidden_size = rnn_hidden_size or hidden_size // 2
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.embedder = embedder
+        self.num_layers = num_layers
+        self.bidirectional = bidirectional
+        self.dropout = dropout
+        self.output_type = output_type
+
+        self.rnn = nn.LSTM(input_size=self.input_size,
+                           hidden_size=self.rnn_hidden_size,
+                           num_layers=self.num_layers,
+                           batch_first=True,
+                           dropout=self.dropout if self.num_layers > 1 else 0,
+                           bidirectional=self.bidirectional)
+        init_rnn_wt(self.rnn)
+
+        if self.output_type == "seq2seq":
+            self.W_h = nn.Linear(
+                self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False
+            )
+
+    def forward(self, inputs, hidden=None):
+        """
+        forward
+        """
+        if isinstance(inputs, tuple):
+            inputs, lengths = inputs
+        else:
+            inputs, lengths = inputs, None
+
+        if self.embedder is not None:
+            rnn_inputs = self.embedder(inputs)
+        else:
+            rnn_inputs = inputs
+
+        batch_size = rnn_inputs.size(0)
+
+        num_valid = None
+        if lengths is not None:
+            num_valid = lengths.gt(0).int().sum().item()  # 当batch不足batch_size
+            sorted_lengths, indices = lengths.sort(descending=True)
+            rnn_inputs = rnn_inputs.index_select(0, indices)
+
+            rnn_inputs = pack_padded_sequence(
+                rnn_inputs[:num_valid],
+                sorted_lengths[:num_valid].tolist(),
+                batch_first=True)
+
+            if hidden is not None:
+                hidden = hidden.index_select(1, indices)[:, :num_valid]
+
+        self.rnn.flatten_parameters()
+        # outputs (batch, seq_len, num_directions * rnn_hidden_size)
+        # h (num_layers * num_directions, batch, rnn_hidden_size)
+        outputs, last_hidden = self.rnn(rnn_inputs, hidden)
+
+        h, c = last_hidden
+        if self.bidirectional:
+            last_hidden = self._bridge_bidirectional_hidden(last_hidden)
+
+        if lengths is not None:
+            outputs, _ = pad_packed_sequence(outputs, batch_first=True)
+
+            if num_valid < batch_size:
+                zeros = outputs.new_zeros(
+                    batch_size - num_valid, outputs.size(1), self.hidden_size)
+                outputs = torch.cat([outputs, zeros], dim=0)
+
+                zeros = last_hidden.new_zeros(
+                    self.num_layers, batch_size - num_valid, self.hidden_size)
+                last_hidden = torch.cat([last_hidden, zeros], dim=1)
+            h, c = last_hidden
+            _, inv_indices = indices.sort()
+            outputs = outputs.index_select(0, inv_indices)
+            h = h.index_select(1, inv_indices)
+            c = c.index_select(1, inv_indices)
+
+        if self.output_type == "seq2seq":
+            encoder_feature = outputs.view(-1, self.num_directions * self.hidden_size)
+            encoder_feature = self.W_h(encoder_feature)
+            return outputs, encoder_feature, (h, c)
+
+        return outputs, (h, c)
+
+    def _bridge_bidirectional_hidden(self, hidden):
+        """
+        hidden is the last-hide
+        the bidirectional hidden is (num_layers * num_directions, batch_size, rnn_hidden_size)
+        we need to convert it to (num_layers, batch_size, num_directions * rnn_hidden_size)
+        """
+        h, c = hidden
+
+        num_layers = h.size(0) // self.num_directions
+        _, batch_size, rnn_hidden_size = h.size()
+        h = h.view(num_layers, self.num_directions, batch_size, rnn_hidden_size) \
+            .transpose(1, 2).contiguous().view(num_layers, batch_size, rnn_hidden_size * self.num_directions)
+        c = c.view(num_layers, self.num_directions, batch_size, rnn_hidden_size) \
+            .transpose(1, 2).contiguous().view(num_layers, batch_size, rnn_hidden_size * self.num_directions)
+        return (h, c)
+
+
+class GRUEncoder(nn.Module):
+    """
     A GRU recurrent neural network encoder.
     """
+
     def __init__(self,
                  input_size,
                  hidden_size,
@@ -45,11 +154,11 @@ class LSTMEncoder(nn.Module):
                  num_layers=1,
                  bidirectional=True,
                  dropout=0.0):
-        super(LSTMEncoder, self).__init__()
+        super(GRUEncoder, self).__init__()
 
         num_directions = 2 if bidirectional else 1
         assert hidden_size % num_directions == 0
-        rnn_hidden_size = hidden_size
+        rnn_hidden_size = hidden_size // num_directions
 
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -59,19 +168,14 @@ class LSTMEncoder(nn.Module):
         self.bidirectional = bidirectional
         self.dropout = dropout
 
-        self.rnn = nn.LSTM(input_size=self.input_size,
+        self.rnn = nn.GRU(input_size=self.input_size,
                           hidden_size=self.rnn_hidden_size,
                           num_layers=self.num_layers,
                           batch_first=True,
                           dropout=self.dropout if self.num_layers > 1 else 0,
                           bidirectional=self.bidirectional)
-        init_lstm_wt(self.rnn)
-        self.W_h = nn.Linear(self.hidden_size * 2, self.hidden_size * 2, bias=False)
 
     def forward(self, inputs, hidden=None):
-        """
-        forward
-        """
         if isinstance(inputs, tuple):
             inputs, lengths = inputs
         else:
@@ -100,9 +204,8 @@ class LSTMEncoder(nn.Module):
         self.rnn.flatten_parameters()
         outputs, last_hidden = self.rnn(rnn_inputs, hidden)
 
-        # if self.bidirectional:
-        #     last_hidden = self._bridge_bidirectional_hidden(last_hidden)
-
+        if self.bidirectional:
+            last_hidden = self._bridge_bidirectional_hidden(last_hidden)
 
         if lengths is not None:
             outputs, _ = pad_packed_sequence(outputs, batch_first=True)
@@ -118,21 +221,28 @@ class LSTMEncoder(nn.Module):
 
             _, inv_indices = indices.sort()
             outputs = outputs.index_select(0, inv_indices)
-            last_hidden1 = last_hidden[0].index_select(1, inv_indices)
-            last_hidden2 = last_hidden[0].index_select(1, inv_indices)
+            last_hidden = last_hidden.index_select(1, inv_indices)
+
+        return outputs, last_hidden
+
+    def _bridge_bidirectional_hidden(self, hidden):
+        """
+        hidden is the last-hide
+        the bidirectional hidden is (num_layers * num_directions, batch_size, rnn_hidden_size)
+        we need to convert it to (num_layers, batch_size, num_directions * rnn_hidden_size)
+        """
+        num_layers = hidden.size(0) // 2
+        _, batch_size, hidden_size = hidden.size()
+        return hidden.view(num_layers, 2, batch_size, hidden_size) \
+            .transpose(1, 2).contiguous().view(num_layers, batch_size, hidden_size * 2)
 
 
-        encoder_feature = outputs.view(-1, 2*self.hidden_size)
-        encoder_feature = self.W_h(encoder_feature)
-
-        return outputs, encoder_feature, (last_hidden1, last_hidden2)
-
-
-
+# old vision gru based
 class RNNEncoder(nn.Module):
     """
     A GRU recurrent neural network encoder.
     """
+
     def __init__(self,
                  input_size,
                  hidden_size,
@@ -222,7 +332,7 @@ class RNNEncoder(nn.Module):
         """
         num_layers = hidden.size(0) // 2
         _, batch_size, hidden_size = hidden.size()
-        return hidden.view(num_layers, 2, batch_size, hidden_size)\
+        return hidden.view(num_layers, 2, batch_size, hidden_size) \
             .transpose(1, 2).contiguous().view(num_layers, batch_size, hidden_size * 2)
 
 
@@ -230,6 +340,7 @@ class HRNNEncoder(nn.Module):
     """
     HRNNEncoder
     """
+
     def __init__(self,
                  sub_encoder,
                  hiera_encoder):

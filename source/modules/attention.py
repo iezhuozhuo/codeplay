@@ -214,27 +214,38 @@ class PointerAttention(nn.Module):
         # attention
         if self.is_coverage:
             self.W_c = nn.Linear(1, self.hidden_size * 2, bias=False)
-        self.decode_proj = nn.Linear(self.hidden_size * 2, self.hidden_size * 2)
-        self.v = nn.Linear(self.hidden_size * 2, 1, bias=False)
+        self.W_s = nn.Linear(self.hidden_size * 2, self.hidden_size * 2)
+        self.V = nn.Linear(self.hidden_size * 2, 1, bias=False)
 
     def forward(self, s_t_hat, encoder_outputs, encoder_feature, encoder_mask, coverage):
+        """
+        :param s_t_hat: 对于LSTM是c,h的按列拼接， GRU尚未制作 公式中的s_t
+        :param encoder_outputs: attention机制中的 v
+        :param encoder_feature: encoder_outputs 的线性变换  W_h*encoder_outputs
+        :param encoder_mask: 输入的mask
+        :param coverage: 是否使用 coverage
+        :return: 上下文向量，注意力权重， coverage向量
+        """
         bsz, seq, dim = list(encoder_outputs.size())
 
-        dec_fea = self.decode_proj(s_t_hat)  # B x 2*hid_dim
+        dec_fea = self.W_s(s_t_hat)  # B x 2*hid_dim
         dec_fea_expanded = dec_fea.unsqueeze(1).expand(bsz, seq, dim).contiguous()  # B x seq x 2*hid_dim
         dec_fea_expanded = dec_fea_expanded.view(-1, dim)  # B * seq x 2*hid_dim
-
         att_features = encoder_feature + dec_fea_expanded  # B * seq x 2*hidden_dim
+
         if self.is_coverage:
+            coverage = coverage.index_select(1, torch.arange(0, seq, dtype=int).to(coverage.device))
             coverage_input = coverage.view(-1, 1)  # B * seq x 1
             coverage_feature = self.W_c(coverage_input)  # B * seq x 2*hidden_dim
+            # W_s*s_t + W_h*h + W_c*coverage
             att_features = att_features + coverage_feature
 
         e = torch.tanh(att_features)  # B * seq x 2*hidden_dim
-        scores = self.v(e)  # B * seq x 1
+        scores = self.V(e)  # B * seq x 1
         scores = scores.view(-1, seq)  # B x seq
 
-        attn_weight_ = F.softmax(scores, dim=1) * encoder_mask  # B x seq
+        # attn_weight_ = F.softmax(scores, dim=1) * encoder_mask  # B x seq
+        attn_weight_ = F.softmax(scores, dim=1)
         normalization_factor = attn_weight_.sum(1, keepdim=True)
         attn_weight = attn_weight_ / normalization_factor
 
@@ -247,5 +258,8 @@ class PointerAttention(nn.Module):
         if self.is_coverage:
             coverage = coverage.view(-1, seq)
             coverage = coverage + attn_weight
+            if seq < encoder_mask.size(1):
+                zeros = coverage.new_zeros(coverage.size(0), encoder_mask.size(1) - seq)
+                coverage = torch.cat([coverage, zeros], dim=1)
 
         return h_context, attn_weight, coverage

@@ -29,10 +29,10 @@ def checkoutput_and_setcuda(args):
         os.makedirs(args.output_dir)
 
     if (
-        os.path.exists(args.output_dir)
-        and os.listdir(args.output_dir)
-        and args.do_train
-        and not args.overwrite_output_dir
+            os.path.exists(args.output_dir)
+            and os.listdir(args.output_dir)
+            and args.do_train
+            and not args.overwrite_output_dir
     ):
         raise ValueError(
             f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
@@ -113,57 +113,49 @@ class trainer(Trainer):
         tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-            # batch = tuple(t.to(self.args.device) for t in batch)
-            c_t_1 = Variable(torch.zeros((self.args.train_batch_size, 2 * self.args.hidden_size))).to(self.args.device)
-            coverage = Variable(torch.zeros(batch[0].size())).to(self.args.device)
+            batch = tuple(t.to(self.args.device) for t in batch)
+            article_ids, article_len, article_mask, article_ids_extend_vocab, \
+            summary_input_ids, summary_taget_ids, summary_len, summary_mask, extra_zeros = batch
+            h_context = Variable(torch.zeros((article_ids.size(0), 2 * self.args.hidden_size))).to(self.args.device)
+            coverage = Variable(torch.zeros(article_ids.size())).to(self.args.device)
 
-            enc_batch = batch[0].to(self.args.device)
-            enc_padding_mask = batch[1].to(self.args.device)
-            enc_lens = batch[2].to(self.args.device)
-            enc_batch_extend_vocab = batch[7].to(self.args.device)
-            extra_zeros = batch[8].to(self.args.device)
-            dec_batch = batch[3].to(self.args.device)
-            dec_padding_mask = batch[6].to(self.args.device)
-            max_dec_len = batch[5].to(self.args.device)
-            target_batch = batch[4].to(self.args.device)
+            loss = self.model(article_ids, article_len, article_mask, article_ids_extend_vocab,
+                              summary_input_ids, summary_taget_ids, summary_mask, summary_len,
+                              h_context, extra_zeros, coverage)
 
-            outputs = self.model(enc_batch, enc_lens, dec_batch, enc_padding_mask, c_t_1,
-                                 extra_zeros, enc_batch_extend_vocab, coverage, target_batch, max_dec_len, dec_padding_mask)
-            # loss = outputs[0]
-            #
-            # if self.args.n_gpu > 1:
-            #     loss = loss.mean()  # mean() to average on multi-gpu.
-            # if self.args.gradient_accumulation_steps > 1:
-            #     loss = loss / self.args.gradient_accumulation_steps
-            #
-            # if self.args.fp16:
-            #     try:
-            #         from apex import amp
-            #     except ImportError:
-            #         raise ImportError(
-            #             "Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-            #     with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-            #         scaled_loss.backward()
-            #     if self.grad_clip:
-            #         torch.nn.utils.clip_grad_norm_(amp.master_params(self.optimizer), self.grad_clip)
-            # else:
-            #     loss.backward()
-            #     if self.grad_clip:
-            #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-            #
-            # tr_loss += loss.item()
-            #
-            # if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
-            #     self.optimizer.step()
-            #     if self.lr_scheduler is not None:
-            #         self.lr_scheduler.step()  # Update learning rate schedule
-            #     self.model.zero_grad()
-            #     self.global_step += 1
-            #
-            # if self.global_step % self.log_steps == 0:
-            #     # logging_loss = tr_loss / self.global_step
-            #     self.logger.info("the current train_steps is {}".format(self.global_step))
-            #     self.logger.info("the current logging_loss is {}".format(loss.item()))
+            if self.args.n_gpu > 1:
+                loss = loss.mean()  # mean() to average on multi-gpu.
+            if self.args.gradient_accumulation_steps > 1:
+                loss = loss / self.args.gradient_accumulation_steps
+
+            if self.args.fp16:
+                try:
+                    from apex import amp
+                except ImportError:
+                    raise ImportError(
+                        "Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                if self.grad_clip:
+                    torch.nn.utils.clip_grad_norm_(amp.master_params(self.optimizer), self.grad_clip)
+            else:
+                loss.backward()
+                if self.grad_clip:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+
+            tr_loss += loss.item()
+
+            if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
+                self.optimizer.step()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()  # Update learning rate schedule
+                self.model.zero_grad()
+                self.global_step += 1
+
+            if self.global_step % self.log_steps == 0:
+                # logging_loss = tr_loss / self.global_step
+                self.logger.info("the current train_steps is {}".format(self.global_step))
+                self.logger.info("the current logging_loss is {}".format(loss.item()))
 
             # if self.global_step % self.valid_steps == 0:
             #     self.logger.info(self.valid_start_message)
@@ -173,23 +165,25 @@ class trainer(Trainer):
             #     else:
             #         model = self.model
             #     model.to(self.args.device)
+            #
+            #     metrics = evaluate(self.args, model, self.valid_iter, self.logger)
+            #
+            #     cur_valid_metric = metrics[self.valid_metric_name]
+            #     if self.is_decreased_valid_metric:
+            #         is_best = cur_valid_metric < self.best_valid_metric
+            #     else:
+            #         is_best = cur_valid_metric > self.best_valid_metric
+            #     if is_best:
+            #         self.best_valid_metric = cur_valid_metric
+            #     self.save(is_best)
+            #     self.logger.info("-" * 85 + "\n")
 
-                #metrics = evaluate(self.args, model, self.valid_iter, self.logger)
-
-                #cur_valid_metric = metrics[self.valid_metric_name]
-                # if self.is_decreased_valid_metric:
-                #     is_best = cur_valid_metric < self.best_valid_metric
-                # else:
-                #     is_best = cur_valid_metric > self.best_valid_metric
-                # if is_best:
-                #     self.best_valid_metric = cur_valid_metric
-                # self.save(is_best)
-                # self.logger.info("-" * 85 + "\n")
 
     def train(self):
         if self.args.max_steps > 0:
             t_total = self.args.max_steps
-            self.args.num_train_epochs = self.args.max_steps // (len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
+            self.args.num_train_epochs = self.args.max_steps // (
+                        len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
         else:
             t_total = len(self.train_iter) // self.args.gradient_accumulation_steps * self.args.num_train_epochs
 
@@ -223,11 +217,14 @@ class trainer(Trainer):
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
             self.model = torch.nn.parallel.DistributedDataParallel(
-                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank, find_unused_parameters=True,
+                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank,
+                find_unused_parameters=True,
             )
 
         for _ in range(int(self.num_epochs)):
             self.train_epoch()
+        # FIXME 保存model
+        self.save()
 
     def save(self, is_best=False, save_mode="best"):
         model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
@@ -277,7 +274,6 @@ class trainer(Trainer):
             "Loaded train state from '{}' with (epoch-{} best_valid_metric-{:.3f})".format(
                 train_file, self.epoch, self.best_valid_metric))
 
-
 # def evaluate(args, model, valid_dataset, logger):
 #     eval_loss, nb_eval_steps = 0.0, 0
 #     labels, preds = [], []
@@ -316,9 +312,9 @@ class trainer(Trainer):
 #                     else:
 #                         temp_2.append(tags[i][j])
 
-    # seqeval评估
-    # metrics = cal_performance(preds, labels)
-    # metrics.update({"loss": eval_loss})
-    # for key in sorted(metrics.keys()):
-    #     logger.info("  %s = %s", key.upper(), str(metrics[key]))
-    # return #metrics
+# seqeval评估
+# metrics = cal_performance(preds, labels)
+# metrics.update({"loss": eval_loss})
+# for key in sorted(metrics.keys()):
+#     logger.info("  %s = %s", key.upper(), str(metrics[key]))
+# return #metrics
