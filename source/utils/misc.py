@@ -1,16 +1,83 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
-"""
-File: source/utils/misc.py
-"""
+# @Time    : 2020/7/9 21:01
+# @Author  : zhuo & zdy
+# @github   : iezhuozhuo
+import os
+import time
+import random
+import numpy as np
+import argparse
+import logging
 
 import torch
-import argparse
+
+def set_seed(args):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.n_gpu > 0:
+        torch.cuda.manual_seed_all(args.seed)
+
+
+def checkoutput_and_setcuda(args):
+    args.output_dir = os.path.join(args.output_dir, args.model_type)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    if (
+            os.path.exists(args.output_dir)
+            and os.listdir(args.output_dir)
+            and args.do_train
+            and not args.overwrite_output_dir
+    ):
+        raise ValueError(
+            f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
+        )
+
+    # Setup CUDA, GPU & distributed training
+    if args.local_rank == -1 or args.no_cuda:
+        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
+    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", args.local_rank)
+        torch.distributed.init_process_group(backend="nccl")
+        args.n_gpu = 1
+    args.device = device
+    return args
+
+
+def init_logger(args=None):
+    logger = logging.getLogger(__name__)
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+    )
+    if args != None:
+        logger.warning(
+            "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
+            args.local_rank,
+            args.device,
+            args.n_gpu,
+            bool(args.local_rank != -1),
+            args.fp16,
+        )
+    return logger
+
+
+logger = init_logger()
+def timer(func):
+    """耗时装饰器，计算函数运行时长"""
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        r = func(*args, **kwargs)
+        end = time.time()
+        cost = end - start
+        logger.info(f"Cost time: {cost} s")
+        return r
+
+    return wrapper
 
 
 class Pack(dict):
@@ -184,6 +251,8 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Unsupported value encountered.')
+
+
 
 
 if __name__ == '__main__':

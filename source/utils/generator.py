@@ -1,25 +1,26 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
-"""
-File: source/utils/generator.py
-"""
+# @Time    : 2020/7/9 21:01
+# @Author  : zhuo & zdy
+# @github   : iezhuozhuo
+
+import os
+import time
+from rouge import Rouge
 
 import torch
+from torch.autograd import Variable
 
+import source.utils.Constant as constant
 from source.utils.misc import sequence_mask
 from source.utils.misc import list2tensor
-from source.utils.misc import Pack
+from source.utils.misc import Pack, timer
 
 
 class TopKGenerator(object):
     """
     TopKGenerator
     """
+
     def __init__(self,
                  model,
                  src_field,
@@ -86,7 +87,7 @@ class TopKGenerator(object):
         stored_predecessors = list()
         stored_emitted_symbols = list()
 
-        for t in range(1, self.max_length+1):
+        for t in range(1, self.max_length + 1):
             # Run the RNN one step forward
             output, dec_state, attn = self.model.decode(input_var, dec_state)
 
@@ -97,7 +98,7 @@ class TopKGenerator(object):
             sequence_scores = sequence_scores.unsqueeze(1).repeat(1, self.V)
             if self.length_average and t > 1:
                 sequence_scores = sequence_scores * \
-                    (1 - 1/t) + log_softmax_output / t
+                                  (1 - 1 / t) + log_softmax_output / t
             else:
                 sequence_scores += log_softmax_output
 
@@ -112,7 +113,7 @@ class TopKGenerator(object):
 
             # Update fields for next timestep
             predecessors = (
-                candidates / self.V + self.pos_index.expand_as(candidates)).view(b * self.k)
+                    candidates / self.V + self.pos_index.expand_as(candidates)).view(b * self.k)
 
             dec_state = dec_state.index_select(predecessors)
 
@@ -163,7 +164,7 @@ class TopKGenerator(object):
         # initialize the back pointer with the sorted order of the last step beams.
         # add self.pos_index for indexing variable with b*k as the first dimension.
         t_predecessors = (
-            sorted_idx + self.pos_index.expand_as(sorted_idx)).view(b * self.k)
+                sorted_idx + self.pos_index.expand_as(sorted_idx)).view(b * self.k)
 
         while t >= 0:
             # Re-order the variables with the back pointer
@@ -190,7 +191,7 @@ class TopKGenerator(object):
             #
             eos_indices = symbols[t].data.eq(self.EOS).nonzero()
             if eos_indices.dim() > 0:
-                for i in range(eos_indices.size(0)-1, -1, -1):
+                for i in range(eos_indices.size(0) - 1, -1, -1):
                     # Indices of the EOS symbol for both variables
                     # with b*k as the first dimension, and b, k for
                     # the first two dimensions
@@ -222,7 +223,7 @@ class TopKGenerator(object):
                         for k_idx in re_sorted_idx[b_idx, :]]
 
         re_sorted_idx = (
-            re_sorted_idx + self.pos_index.expand_as(re_sorted_idx)).view(b * self.k)
+                re_sorted_idx + self.pos_index.expand_as(re_sorted_idx)).view(b * self.k)
 
         # Reverse the sequences and re-order at the same time
         # It is reversed because the backtracking happens in reverse time order
@@ -289,3 +290,9 @@ class TopKGenerator(object):
         pred = self.tgt_field.denumericalize(preds[0][0])
 
         return pred
+
+# TODO Beam Search
+"""
+教程
+https://github.com/budzianowski/PyTorch-Beam-Search-Decoding/blob/master/decode_beam.py
+"""

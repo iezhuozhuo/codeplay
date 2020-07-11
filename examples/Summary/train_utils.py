@@ -15,61 +15,6 @@ from torch.autograd import Variable
 from source.utils.engine import Trainer
 
 
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
-
-
-def checkoutput_and_setcuda(args):
-    args.output_dir = os.path.join(args.output_dir, args.model_type)
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    if (
-            os.path.exists(args.output_dir)
-            and os.listdir(args.output_dir)
-            and args.do_train
-            and not args.overwrite_output_dir
-    ):
-        raise ValueError(
-            f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
-        )
-
-    # Setup CUDA, GPU & distributed training
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
-    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
-        args.n_gpu = 1
-    args.device = device
-    return args
-
-
-def init_logger(args=None):
-    logger = logging.getLogger(__name__)
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO,
-    )
-    if args != None:
-        logger.warning(
-            "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
-            args.local_rank,
-            args.device,
-            args.n_gpu,
-            bool(args.local_rank != -1),
-            args.fp16,
-        )
-    return logger
-
-
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
                  num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, save_summary=False):
@@ -157,26 +102,26 @@ class trainer(Trainer):
                 self.logger.info("the current train_steps is {}".format(self.global_step))
                 self.logger.info("the current logging_loss is {}".format(loss.item()))
 
-            # if self.global_step % self.valid_steps == 0:
-            #     self.logger.info(self.valid_start_message)
-            #
-            #     if isinstance(self.model, torch.nn.DataParallel):
-            #         model = self.model.module
-            #     else:
-            #         model = self.model
-            #     model.to(self.args.device)
-            #
-            #     metrics = evaluate(self.args, model, self.valid_iter, self.logger)
-            #
-            #     cur_valid_metric = metrics[self.valid_metric_name]
-            #     if self.is_decreased_valid_metric:
-            #         is_best = cur_valid_metric < self.best_valid_metric
-            #     else:
-            #         is_best = cur_valid_metric > self.best_valid_metric
-            #     if is_best:
-            #         self.best_valid_metric = cur_valid_metric
-            #     self.save(is_best)
-            #     self.logger.info("-" * 85 + "\n")
+            if self.global_step % self.valid_steps == 0:
+                self.logger.info(self.valid_start_message)
+
+                if isinstance(self.model, torch.nn.DataParallel):
+                    model = self.model.module
+                else:
+                    model = self.model
+                model.to(self.args.device)
+
+                metrics = evaluate(self.args, model, self.valid_iter, self.logger)
+
+                cur_valid_metric = metrics[self.valid_metric_name]
+                if self.is_decreased_valid_metric:
+                    is_best = cur_valid_metric < self.best_valid_metric
+                else:
+                    is_best = cur_valid_metric > self.best_valid_metric
+                if is_best:
+                    self.best_valid_metric = cur_valid_metric
+                self.save(is_best)
+                self.logger.info("-" * 85 + "\n")
 
 
     def train(self):
@@ -223,8 +168,6 @@ class trainer(Trainer):
 
         for _ in range(int(self.num_epochs)):
             self.train_epoch()
-        # FIXME 保存model
-        self.save()
 
     def save(self, is_best=False, save_mode="best"):
         model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
@@ -256,8 +199,11 @@ class trainer(Trainer):
                     best_model_file, self.valid_metric_name.upper(), self.best_valid_metric))
 
     def load(self, model_file, train_file):
-        model_state_dict = torch.load(
-            model_file, map_location=lambda storage, loc: storage)
+
+        model_state_dict = {k.replace('module.', ''): v for k, v in torch.load(model_file).items()}
+
+        # model_state_dict = torch.load(
+        #     model_file, map_location=lambda storage, loc: storage)
         self.model.load_state_dict(model_state_dict)
         self.logger.info("Loaded model state from '{}'".format(model_file))
 
@@ -274,47 +220,32 @@ class trainer(Trainer):
             "Loaded train state from '{}' with (epoch-{} best_valid_metric-{:.3f})".format(
                 train_file, self.epoch, self.best_valid_metric))
 
-# def evaluate(args, model, valid_dataset, logger):
-#     eval_loss, nb_eval_steps = 0.0, 0
-#     labels, preds = [], []
-#     model.eval()
-#     for batch in valid_dataset:
-#         inputs_id, inputs_label, inputs_len = tuple(t.to(args.device) for t in batch)
-#         with torch.no_grad():
-#             tmp_eval_loss, logits = model(inputs=(inputs_id, inputs_len), labels=inputs_label)
-#
-#             if getattr(args, "optimized"):
-#                 pred = model.crf.decode(logits)
-#                 tags = pred.squeeze(0).cpu().numpy().tolist()
-#             else:
-#                 tags, _ = model.crf._obtain_labels(logits, args.id2label, inputs_len)
-#
-#             if args.n_gpu > 1:
-#                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
-#
-#             eval_loss += tmp_eval_loss.item()
-#         nb_eval_steps += 1
-#
-#         out_label_ids = inputs_label.cpu().numpy().tolist()
-#         for i, label in enumerate(out_label_ids):
-#             temp_1, temp_2 = [], []
-#             for j, m in enumerate(label):
-#                 if j == 0:
-#                     continue
-#                 elif out_label_ids[i][j] == args.label2id[constants.SEP]:
-#                     labels.append(temp_1)
-#                     preds.append(temp_2)
-#                     break
-#                 else:
-#                     temp_1.append(args.id2label[out_label_ids[i][j]])
-#                     if args.optimized:
-#                         temp_2.append(args.id2label[tags[i][j]])
-#                     else:
-#                         temp_2.append(tags[i][j])
 
-# seqeval评估
-# metrics = cal_performance(preds, labels)
-# metrics.update({"loss": eval_loss})
-# for key in sorted(metrics.keys()):
-#     logger.info("  %s = %s", key.upper(), str(metrics[key]))
-# return #metrics
+def evaluate(args, model, valid_dataset, logger):
+    eval_loss, nb_eval_steps = 0.0, 0
+    model.eval()
+    for batch_id, batch in enumerate(valid_dataset, 1):
+        model.train()
+        batch = tuple(t.to(args.device) for t in batch)
+        article_ids, article_len, article_mask, article_ids_extend_vocab, \
+        summary_input_ids, summary_taget_ids, summary_len, summary_mask, extra_zeros = batch
+        h_context = Variable(torch.zeros((article_ids.size(0), 2 * args.hidden_size))).to(args.device)
+        coverage = Variable(torch.zeros(article_ids.size())).to(args.device)
+
+        with torch.no_grad():
+            tmp_eval_loss = model(article_ids, article_len, article_mask, article_ids_extend_vocab,
+                              summary_input_ids, summary_taget_ids, summary_mask, summary_len,
+                              h_context, extra_zeros, coverage)
+
+            if args.n_gpu > 1:
+                tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu.
+            eval_loss += tmp_eval_loss.item()
+        nb_eval_steps += 1
+
+    eval_loss = eval_loss / nb_eval_steps
+    metrics = {"loss": eval_loss}
+    for key in sorted(metrics.keys()):
+        logger.info("  %s = %s", key.upper(), str(metrics[key]))
+    return metrics
+
+

@@ -11,27 +11,12 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 from transformers import BertTokenizer
 
-from train_utils import init_logger
-
+from source.utils.misc import init_logger, timer
 import source.utils.Constant as constants
 from source.inputters.field import TextField, NumberField
-from source.inputters.dataset import DataProcessor
 
 
 logger = init_logger()
-
-
-def timer(func):
-    """耗时装饰器，计算函数运行时长"""
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        r = func(*args, **kwargs)
-        end = time.time()
-        cost = end - start
-        logger.info(f"Cost time: {cost} s")
-        return r
-
-    return wrapper
 
 
 class InputFeatures(object):
@@ -39,7 +24,7 @@ class InputFeatures(object):
     def __init__(self,
                  article_ids, article_len, article_mask,
                  summary_input_ids, summary_len, summary_taget_ids, summary_mask,
-                 article_ids_extend_vocab=None, article_oovs=None, extra_zeros=None,):
+                 article_ids_extend_vocab=None, article_oovs=None, extra_zeros=None, original_summarys=None):
         # normal softmax or ner
         self.article_ids = article_ids
         self.article_len = article_len
@@ -52,6 +37,7 @@ class InputFeatures(object):
         self.article_ids_extend_vocab = article_ids_extend_vocab
         self.article_oovs = article_oovs
         self.extra_zeros = extra_zeros
+        self.original_summarys = original_summarys
 
 
 class SummaGenCorpus(object):
@@ -255,7 +241,8 @@ class SummaGenCorpus(object):
                 summary_mask=summary_mask,
                 article_ids_extend_vocab=article_ids_extend_vocab,
                 article_oovs=article_oovs,
-                extra_zeros=extra_zeros))
+                extra_zeros=extra_zeros,
+                original_summarys=data["summary"]))
 
         len_seq_enc = np.array(len_seq_enc)
         len_seq_dec = np.array(len_seq_dec)
@@ -320,30 +307,47 @@ class SummaGenCorpus(object):
 
     def create_batch(self, data_type="train"):
         examples = self.data[data_type]
-        article_ids = torch.tensor([f.article_ids for f in examples], dtype=torch.long)
-        article_mask = torch.tensor([f.article_mask for f in examples], dtype=torch.long)
-        article_len = torch.tensor([f.article_len for f in examples], dtype=torch.long)
-        summary_input_ids = torch.tensor([f.summary_input_ids for f in examples], dtype=torch.long)
-        summary_taget_ids = torch.tensor([f.summary_taget_ids for f in examples], dtype=torch.long)
-        summary_len = torch.tensor([f.summary_len for f in examples], dtype=torch.long)
-        summary_mask = torch.tensor([f.summary_mask for f in examples], dtype=torch.long)
-        article_ids_extend_vocab = torch.tensor([f.article_ids_extend_vocab for f in examples], dtype=torch.long)
-        extra_zeros = torch.tensor([f.extra_zeros for f in examples], dtype=torch.long)
+        # FIXME Check example num
+        # examples = examples[0:1024]
+        if data_type != "test":
+            article_ids = torch.tensor([f.article_ids for f in examples], dtype=torch.long)
+            article_mask = torch.tensor([f.article_mask for f in examples], dtype=torch.long)
+            article_len = torch.tensor([f.article_len for f in examples], dtype=torch.long)
+            summary_input_ids = torch.tensor([f.summary_input_ids for f in examples], dtype=torch.long)
+            summary_taget_ids = torch.tensor([f.summary_taget_ids for f in examples], dtype=torch.long)
+            summary_len = torch.tensor([f.summary_len for f in examples], dtype=torch.long)
+            summary_mask = torch.tensor([f.summary_mask for f in examples], dtype=torch.long)
+            article_ids_extend_vocab = torch.tensor([f.article_ids_extend_vocab for f in examples], dtype=torch.long)
+            extra_zeros = torch.tensor([f.extra_zeros for f in examples], dtype=torch.long)
 
-        dataset = TensorDataset(
-            article_ids, article_len, article_mask, article_ids_extend_vocab,
-            summary_input_ids, summary_taget_ids, summary_len, summary_mask,
-            extra_zeros
-        )
+            dataset = TensorDataset(
+                article_ids, article_len, article_mask, article_ids_extend_vocab,
+                summary_input_ids, summary_taget_ids, summary_len, summary_mask,
+                extra_zeros
+            )
+        else:
+            article_ids = torch.tensor([f.article_ids for f in examples], dtype=torch.long)
+            article_mask = torch.tensor([f.article_mask for f in examples], dtype=torch.long)
+            article_len = torch.tensor([f.article_len for f in examples], dtype=torch.long)
+            article_ids_extend_vocab = torch.tensor([f.article_ids_extend_vocab for f in examples], dtype=torch.long)
+            extra_zeros = torch.tensor([f.extra_zeros for f in examples], dtype=torch.long)
+
+            dataset = TensorDataset(
+                article_ids, article_len, article_mask, article_ids_extend_vocab,
+                extra_zeros
+            )
+
+            origin_dataset = [(f.article_oovs, f.original_summarys) for f in examples]
 
         if data_type == "train":
             train_sampler = RandomSampler(dataset) if self.args.local_rank == -1 else DistributedSampler(dataset)
             dataloader = DataLoader(dataset, sampler=train_sampler, batch_size=self.args.train_batch_size)
         else:
+            eval_batch_size = self.args.eval_batch_size if data_type != "test" else 1
             eval_sampler = SequentialSampler(dataset)
-            dataloader = DataLoader(dataset, sampler=eval_sampler, batch_size=self.args.eval_batch_size)
+            dataloader = DataLoader(dataset, sampler=eval_sampler, batch_size=eval_batch_size)
 
-        return dataloader
+        return dataloader if data_type != "test" else (dataloader, origin_dataset)
 
     def tokenizer(self, line):
         # jieba.enable_parallel()

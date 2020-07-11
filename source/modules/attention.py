@@ -219,10 +219,10 @@ class PointerAttention(nn.Module):
 
     def forward(self, s_t_hat, encoder_outputs, encoder_feature, encoder_mask, coverage):
         """
-        :param s_t_hat: 对于LSTM是c,h的按列拼接， GRU尚未制作 公式中的s_t
+        :param s_t_hat: 对于 LSTM 是c,h的按列拼接， GRU尚未实现 公式中的s_t
         :param encoder_outputs: attention机制中的 v
         :param encoder_feature: encoder_outputs 的线性变换  W_h*encoder_outputs
-        :param encoder_mask: 输入的mask
+        :param encoder_mask: 输入的 mask
         :param coverage: 是否使用 coverage
         :return: 上下文向量，注意力权重， coverage向量
         """
@@ -245,7 +245,7 @@ class PointerAttention(nn.Module):
         scores = scores.view(-1, seq)  # B x seq
 
         # attn_weight_ = F.softmax(scores, dim=1) * encoder_mask  # B x seq
-        attn_weight_ = F.softmax(scores, dim=1)
+        attn_weight_ = F.softmax(scores, dim=1) * encoder_mask.index_select(1, torch.arange(0, seq, dtype=int).to(encoder_mask.device))
         normalization_factor = attn_weight_.sum(1, keepdim=True)
         attn_weight = attn_weight_ / normalization_factor
 

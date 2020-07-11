@@ -8,7 +8,10 @@ def configs(parser):
     parser.add_argument("--max_oov_len", type=int, default=64)
     parser.add_argument("--embedded_size", type=int, default=128)
     parser.add_argument("--hidden_size", type=int, default=256)
+    parser.add_argument("--min_dec_steps", type=int, default=35)
+    parser.add_argument("--beam_size", type=int, default=3)
     parser.add_argument("--pointer_gen", action="store_true", help="whether use the pointer_gen")
+
     parser.add_argument(
         "--article_file",
         default="train_text.txt",
