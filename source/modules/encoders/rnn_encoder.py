@@ -139,6 +139,7 @@ class LSTMEncoder(nn.Module):
             .transpose(1, 2).contiguous().view(num_layers, batch_size, rnn_hidden_size * self.num_directions)
         c = c.view(num_layers, self.num_directions, batch_size, rnn_hidden_size) \
             .transpose(1, 2).contiguous().view(num_layers, batch_size, rnn_hidden_size * self.num_directions)
+
         return (h, c)
 
 
