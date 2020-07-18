@@ -1,11 +1,12 @@
 # Easy data augmentation techniques for text classification
-# Jason Wei and Kai Zou
 
+import re
 import random
 from random import shuffle
 random.seed(1)
 
-#stop words list
+
+# stop words list
 stop_words = ['i', 'me', 'my', 'myself', 'we', 'our', 
 			'ours', 'ourselves', 'you', 'your', 'yours', 
 			'yourself', 'yourselves', 'he', 'him', 'his', 
@@ -28,12 +29,10 @@ stop_words = ['i', 'me', 'my', 'myself', 'we', 'our',
 			'very', 's', 't', 'can', 'will', 'just', 'don', 
 			'should', 'now', '']
 
-#cleaning up text
-import re
+
+# cleaning up text
 def get_only_chars(line):
-
     clean_line = ""
-
     line = line.replace("’", "")
     line = line.replace("'", "")
     line = line.replace("-", " ") #replace hyphens with spaces
@@ -166,10 +165,10 @@ def add_word(new_words):
 	random_idx = random.randint(0, len(new_words)-1)
 	new_words.insert(random_idx, random_synonym)
 
+
 ########################################################################
 # main data augmentation function
 ########################################################################
-
 def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug=9):
 	
 	sentence = get_only_chars(sentence)
@@ -183,22 +182,22 @@ def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug=9)
 	n_ri = max(1, int(alpha_ri*num_words))
 	n_rs = max(1, int(alpha_rs*num_words))
 
-	#sr
+	# sr 同义词替换
 	for _ in range(num_new_per_technique):
 		a_words = synonym_replacement(words, n_sr)
 		augmented_sentences.append(' '.join(a_words))
 
-	#ri
+	# ri 随机插入词
 	for _ in range(num_new_per_technique):
 		a_words = random_insertion(words, n_ri)
 		augmented_sentences.append(' '.join(a_words))
 
-	#rs
+	# rs 随机交换词
 	for _ in range(num_new_per_technique):
 		a_words = random_swap(words, n_rs)
 		augmented_sentences.append(' '.join(a_words))
 
-	#rd
+	# rd 随机删除词
 	for _ in range(num_new_per_technique):
 		a_words = random_deletion(words, p_rd)
 		augmented_sentences.append(' '.join(a_words))
@@ -206,7 +205,7 @@ def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug=9)
 	augmented_sentences = [get_only_chars(sentence) for sentence in augmented_sentences]
 	shuffle(augmented_sentences)
 
-	#trim so that we have the desired number of augmented sentences
+	# trim so that we have the desired number of augmented sentences
 	if num_aug >= 1:
 		augmented_sentences = augmented_sentences[:num_aug]
 	else:

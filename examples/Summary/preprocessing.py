@@ -9,7 +9,6 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
-from transformers import BertTokenizer
 
 from source.utils.misc import init_logger, timer
 import source.utils.Constant as constants

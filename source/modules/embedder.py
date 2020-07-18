@@ -1,6 +1,7 @@
 # coding: utf-8
-
+import pandas as pd
 import numpy as np
+import gensim
 
 import torch
 import torch.nn as nn
@@ -22,6 +23,22 @@ class Embedder(nn.Embedding):
             else:
                 num_known += 1
         self.weight.data.copy_(embeds)
+        print("{} words have pretrained embeddings".format(num_known),
+              "(coverage: {:.3f})".format(num_known / self.num_embeddings))
+
+    def load_embeddingsfor_gensim_vec(self, gensim_model_path, stoi, scale=0.05):
+        weight = torch.zeros(self.num_embeddings, self.embedding_dim)
+        model = gensim.models.Word2Vec.load(gensim_model_path)
+        # word_vec_dict = pd.read_csv(file, encoding="utf-8")
+        num_known = 0
+        for word in stoi:
+            if word in model.wv.index2word:
+                weight[stoi[word]] = torch.from_numpy(model.wv[word])
+                num_known += 1
+            else:
+                nn.init.uniform_(weight[stoi[word]], -scale, scale)
+
+        self.weight.data.copy_(weight)
         print("{} words have pretrained embeddings".format(num_known),
               "(coverage: {:.3f})".format(num_known / self.num_embeddings))
 

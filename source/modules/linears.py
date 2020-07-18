@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from source.modules.activate import parse_activation
+
 
 # TODO 重复定义
 class FeedForwardNetwork(nn.Module):
@@ -41,3 +43,59 @@ class PoolerEndLogits(nn.Module):
         x = self.LayerNorm(x)
         x = self.dense_1(x)
         return x
+
+
+def quickly_perceptron_layer(
+        in_features: int = 0,
+        out_features: int = 0,
+        activation: nn.Module = nn.ReLU()
+) -> nn.Module:
+    """:return: a perceptron layer."""
+    return nn.Sequential(
+        nn.Linear(in_features, out_features),
+        activation
+    )
+
+
+def quickly_multi_layer_perceptron_layer(
+        in_features,
+        mlp_num_layers=1,
+        mlp_num_units=128,
+        mlp_num_fan_out=64,
+        mlp_activation_func='relu') -> nn.Module:
+    """:return: a multiple layer perceptron."""
+
+    activation = parse_activation(mlp_activation_func)
+    mlp_sizes = [
+        in_features,
+        *mlp_num_layers * [mlp_num_units],
+        mlp_num_fan_out
+    ]
+    mlp = [
+        quickly_perceptron_layer(in_f, out_f, activation)
+        for in_f, out_f in zip(mlp_sizes, mlp_sizes[1:])
+    ]
+    return nn.Sequential(*mlp)
+
+
+def quickly_output_layer(
+        task,
+        num_classes: int = 1,
+        in_features: int = 0,
+        out_activation_func: str = ''
+) -> nn.Module:
+    """:return: a correctly shaped torch module for model output."""
+    if task == "classify":
+        out_features = num_classes
+    elif task == "Ranking":
+        out_features = 1
+    else:
+        raise ValueError(f"{task} is not a valid task type. "
+                         f"Must be in `Ranking` and `Classification`.")
+    if out_activation_func:
+        return nn.Sequential(
+            nn.Linear(in_features, out_features),
+            parse_activation(out_activation_func)
+        )
+    else:
+        return nn.Linear(in_features, out_features)

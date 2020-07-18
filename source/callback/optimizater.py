@@ -28,6 +28,7 @@ __call__ = ['SGDW',
             'BertAdam'
             ]
 
+
 class SGDW(Optimizer):
     r"""Implements stochastic gradient descent (optionally with momentum) with
     weight decay from the paper `Fixing Weight Decay Regularization in Adam`_.
@@ -198,6 +199,7 @@ class AdamW(Optimizer):
                     p.data.addcdiv_(-step_size, exp_avg, denom)
         return loss
 
+
 class AdaBound(Optimizer):
     """Implements AdaBound algorithm.
     It has been proposed in `Adaptive Gradient Methods with Dynamic Bound of Learning Rate`_.
@@ -306,6 +308,7 @@ class AdaBound(Optimizer):
                 p.data.add_(-step_size)
         return loss
 
+
 class Nadam(Optimizer):
     """Implements Nadam algorithm (a variant of Adam based on Nesterov momentum).
 
@@ -393,6 +396,7 @@ class Nadam(Optimizer):
                 p.data.addcdiv_(-group['lr'] * momentum_cache_t_1 / (1. - m_schedule_next), exp_avg, denom)
 
         return loss
+
 
 class AdaFactor(Optimizer):
     '''
@@ -563,6 +567,7 @@ class AdaFactor(Optimizer):
                     p.data.add_(-group['weight_decay'] * lr_t, p.data)
         return loss
 
+
 class WeightDecayOptimizerWrapper(Optimizer):
     '''
     Example:
@@ -619,6 +624,7 @@ class WeightDecayOptimizerWrapper(Optimizer):
     @property
     def param_groups(self):
         return self.optimizer.param_groups
+
 
 class NovoGrad(Optimizer):
     """Implements NovoGrad algorithm.
@@ -690,6 +696,7 @@ class NovoGrad(Optimizer):
                 p.data.add_(-step_size, moments)
 
         return loss
+
 
 #
 class Lamb(Optimizer):
@@ -794,6 +801,7 @@ class Lamb(Optimizer):
 
         return loss
 
+
 class Lars(Optimizer):
     r"""Implements the LARS optimizer from https://arxiv.org/pdf/1708.03888.pdf
 
@@ -883,8 +891,8 @@ class Lars(Optimizer):
 
         return loss
 
-#
 
+#
 class RAdam(Optimizer):
     """Implements the RAdam optimizer from https://arxiv.org/pdf/1908.03265.pdf
     Args:
@@ -970,6 +978,7 @@ class RAdam(Optimizer):
                 p.data.copy_(p_data_fp32)
 
         return loss
+
 
 class PlainRAdam(Optimizer):
 
@@ -1137,6 +1146,7 @@ class Ralamb(Optimizer):
 
         return loss
 
+
 class Lookahead(Optimizer):
     '''
     a PyTorch implementation of the Lookahead Optimizer from th paper
@@ -1181,6 +1191,7 @@ class Lookahead(Optimizer):
                 q.data.add_(self.alpha,p.data - q.data)
                 p.data.copy_(q.data)
         return loss
+
 
 class RaLars(Optimizer):
     """Implements the RAdam optimizer from https://arxiv.org/pdf/1908.03265.pdf
@@ -1295,6 +1306,7 @@ class RaLars(Optimizer):
                 p.data.add_(-group['lr'] * local_lr, update)
 
         return loss
+
 
 class Ranger(Optimizer):
     '''
@@ -1447,6 +1459,7 @@ class Ranger(Optimizer):
                     p.data.copy_(slow_p)  #copy interpolated weights to RAdam param tensor
 
         return loss
+
 
 class BertAdam(Optimizer):
     """Implements BERT version of Adam algorithm with weight decay fix.

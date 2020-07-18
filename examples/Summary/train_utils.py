@@ -126,11 +126,11 @@ class trainer(Trainer):
 
     def train(self):
         if self.args.max_steps > 0:
-            t_total = self.args.max_steps
+            self.t_total = self.args.max_steps
             self.args.num_train_epochs = self.args.max_steps // (
                         len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
         else:
-            t_total = len(self.train_iter) // self.args.gradient_accumulation_steps * self.args.num_train_epochs
+            self.t_total = len(self.train_iter) // self.args.gradient_accumulation_steps * self.args.num_train_epochs
 
         self.logger.info(self.train_start_message)
         self.logger.info("Num examples = %d", len(self.train_iter))
@@ -143,7 +143,7 @@ class trainer(Trainer):
             * (torch.distributed.get_world_size() if self.args.local_rank != -1 else 1),
         )
         self.logger.info("Gradient Accumulation steps = %d", self.args.gradient_accumulation_steps)
-        self.logger.info("Total optimization steps = %d", t_total)
+        self.logger.info("Total optimization steps = %d", self.t_total)
         self.logger.info("logger steps = %d", self.log_steps)
         self.logger.info("valid steps = %d", self.valid_steps)
         self.logger.info("-" * 85 + "\n")
