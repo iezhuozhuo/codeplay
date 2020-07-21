@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from source.modules.activate import parse_activation
 from source.modules.linears import quickly_output_layer, quickly_multi_layer_perceptron_layer
 from source.modules.matching import Matching
-from source.modules.encoders.rnn_encoder import LSTMEncoder
+from source.modules.encoders.rnn_encoder import LSTMEncoder, GRUEncoder
 
 
 class ArcI(nn.Module):
@@ -180,6 +180,19 @@ class ArcII(nn.Module):
                 conv_activation_func='relu',
                 dropout_rate=0.5
                 ):
+        """
+        :param embedd:
+        :param left_length:
+        :param right_length:
+        :param kernel_1d_count:
+        :param kernel_1d_size:
+        :param kernel_2d_count:
+        :param kernel_2d_size:
+        :param pool_2d_size:
+        :param conv_activation_func:
+        :param dropout_rate:
+        :return:
+        """
         super(ArcII, self).__int__()
 
         if embedd is None:
@@ -372,7 +385,7 @@ class MVLSTM(nn.Module):
 
         self.dropout = nn.Dropout(p=self.dropout_rate)
 
-        self.out = self.quickly_output_layer(
+        self.out = quickly_output_layer(
             task="classify",
             num_classes=2,
             in_features=self.mlp_num_fan_out,
@@ -527,4 +540,142 @@ class MatchPyramid(nn.Module):
             ),
             activation
         )
+    
 
+# TODO matchSRNN
+class MatchSRNN(nn.Module):
+    def __int__(self):
+        super(MatchSRNN, self).__int__()
+
+
+# MwAN
+class MwAN(nn.Module):
+    def __init__(self,
+                 embedd=None,
+                 hidden_size=128,
+                 num_layers=1,
+                 activation_func='relu',
+                 dropout_rate=0.5,
+                 bidirectional=True
+                 ):
+        super().__init__()
+        """
+        v1版本，没有忠于原文，仅实现了四种注意力机制。
+        原文4.4部分/4.5部分 门控控制输入没有完成。
+        """
+        if embedd is None:
+            raise Exception("The embdding layer is None")
+        self.embedding = embedd
+        self.embedding_dim = embedd.embedding_dim
+
+        self.hidden_size = hidden_size
+
+        self.num_layers = num_layers
+        self.activation_func = activation_func
+        self.dropout_rate = dropout_rate
+        self.num_directions = 2 if bidirectional else 1
+        self.bidirectional = bidirectional
+
+        self.p_encoder = nn.GRU(input_size=self.embedding_dim, hidden_size=self.hidden_size, batch_first=True,
+                                bidirectional=self.bidirectional)
+        self.c_encoder = nn.GRU(input_size=self.embedding_dim, hidden_size=self.hidden_size, batch_first=True,
+                                bidirectional=self.bidirectional)
+        # Multi-Way Attention
+        # concat attention
+        self.Wc1 = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.Wc2 = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.Vc = nn.Linear(self.hidden_size, 1, bias=False)
+
+        # Bilinear Attention
+        self.Wb = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
+
+        # Dot Attention :
+        self.Wd = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.Vd = nn.Linear(self.hidden_size, 1, bias=False)
+        # Minus Attention :
+        self.Wm = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.Vm = nn.Linear(self.hidden_size, 1, bias=False)
+
+        # gate weight
+        # self.Wgc = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
+        # self.Wgd = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
+        # self.Wgb = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
+        # self.Wgm = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
+
+        # 非原文部分
+        self.Ws = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.Vs = nn.Linear(self.hidden_size, 1, bias=False)
+
+        self.gru_agg = nn.GRU(6 * self.num_directions * self.hidden_size, self.hidden_size, batch_first=True, bidirectional=True)
+
+        # predict layer
+        self.Wp = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.Vp = nn.Linear(self.hidden_size, 1, bias=False)
+        self.W1 = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.W2 = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
+        self.V = nn.Linear(self.hidden_size, 1, bias=False)
+        self.output = quickly_output_layer(
+            task="classify", num_classes=2, in_features=self.num_directions * self.hidden_size)
+
+        self.initiation()
+
+    def initiation(self):
+        initrange = 0.1
+        nn.init.uniform_(self.embedding.weight, -initrange, initrange)
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, 0.1)
+
+    def forward(self, inputs):
+        left, right = inputs["text_a"], inputs["text_b"]
+        p_embedding = self.embedding(left)
+        c_embedding = self.embedding(right)
+
+        self.p_encoder.flatten_parameters()
+        hp, _ = self.p_encoder(p_embedding)
+        hp = F.dropout(hp, self.dropout_rate)
+        self.c_encoder.flatten_parameters()
+        hc, _ = self.c_encoder(c_embedding)
+        hc = F.dropout(hc, self.dropout_rate)
+
+        # B,L,D    B,R,D  concat attention
+        _s1 = self.Wc1(hp).unsqueeze(1)  # B,1,L,D
+        _s2 = self.Wc2(hc).unsqueeze(2)  # B,R,1,D
+        attn_concat = F.softmax(self.Vc(torch.tanh(_s1 + _s2)).squeeze(), 2)
+        concat_rep = attn_concat.bmm(hp)
+
+        # billiner attention
+        _s1 = self.Wb(hp).transpose(2, 1)
+        attn_billiner = F.softmax(hc.bmm(_s1), 2)
+        billiner_rep = attn_billiner.bmm(hp)
+
+        # Dot Attention 扩充一维度是因为 输入的两个长度不一致，需要使用矩阵加减乘除的广播
+        _s1 = hp.unsqueeze(1)
+        _s2 = hc.unsqueeze(2)
+        attn_dot = F.softmax(self.Vd(torch.tanh(self.Wd(_s1 * _s2))).squeeze(), 2)
+        dot_rep = attn_dot.bmm(hp)
+
+        # minus attention
+        attn_minus = F.softmax(self.Vm(torch.tanh(self.Wm(_s1 - _s2))).squeeze(), 2)
+        minus_rep = attn_minus.bmm(hp)
+
+        _s1 = hc.unsqueeze(1)
+        _s2 = hc.unsqueeze(2)
+        attn_self = F.softmax(self.Vs(torch.tanh(self.Ws(_s1 * _s2))).squeeze(), 2)
+        self_rep = attn_self.bmm(hc)
+
+        aggregation = torch.cat([hc, self_rep, concat_rep, dot_rep, billiner_rep, minus_rep], 2)
+        self.gru_agg.flatten_parameters()
+        aggregation_representation, _ = self.gru_agg(aggregation)
+
+        # 比原文少一个 vp向量
+        sj = self.Vp(torch.tanh(self.Wp(hp))).transpose(2, 1)
+        rp = F.softmax(sj, 2).bmm(hp)
+
+        # 原文12a~12c公式
+        sj = F.softmax(self.V(self.W1(aggregation_representation) + self.W2(rp)).transpose(2, 1), 2)
+        rc = sj.bmm(aggregation_representation)
+        # 归一化
+        # encoder_output = F.sigmoid(self.prediction(rc))
+        output = self.output(rc.squeeze())
+        return output

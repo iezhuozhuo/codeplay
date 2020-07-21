@@ -59,7 +59,7 @@ class LSTMEncoder(nn.Module):
 
         if self.output_type == "seq2seq":
             self.W_h = nn.Linear(
-                self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False
+                self.rnn_hidden_size * self.num_directions, self.rnn_hidden_size * self.num_directions, bias=False
             )
 
     def forward(self, inputs, hidden=None):
@@ -106,12 +106,17 @@ class LSTMEncoder(nn.Module):
 
             if num_valid < batch_size:
                 zeros = outputs.new_zeros(
-                    batch_size - num_valid, outputs.size(1), self.hidden_size)
+                    batch_size - num_valid, outputs.size(1), self.rnn_hidden_size * self.num_directions)
                 outputs = torch.cat([outputs, zeros], dim=0)
 
-                zeros = last_hidden.new_zeros(
-                    self.num_layers, batch_size - num_valid, self.hidden_size)
-                last_hidden = torch.cat([last_hidden, zeros], dim=1)
+                zeros_h = last_hidden[0].new_zeros(
+                    self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
+                h = torch.cat([last_hidden[0], zeros_h], dim=1)
+                zeros_c = last_hidden[1].new_zeros(
+                    self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
+                c = torch.cat([last_hidden[1], zeros_c], dim=1)
+                last_hidden = (h, c)
+
             h, c = last_hidden
             _, inv_indices = indices.sort()
             outputs = outputs.index_select(0, inv_indices)
@@ -119,7 +124,7 @@ class LSTMEncoder(nn.Module):
             c = c.index_select(1, inv_indices)
 
         if self.output_type == "seq2seq":
-            encoder_feature = outputs.view(-1, self.num_directions * self.hidden_size)
+            encoder_feature = outputs.view(-1, self.num_directions * self.rnn_hidden_size)
             encoder_feature = self.W_h(encoder_feature)
             return outputs, encoder_feature, (h, c)
 
@@ -152,14 +157,18 @@ class GRUEncoder(nn.Module):
                  input_size,
                  hidden_size,
                  embedder=None,
+                 rnn_hidden_size=None,
                  num_layers=1,
                  bidirectional=True,
                  dropout=0.0):
         super(GRUEncoder, self).__init__()
 
-        num_directions = 2 if bidirectional else 1
-        assert hidden_size % num_directions == 0
-        rnn_hidden_size = hidden_size // num_directions
+        self.num_directions = 2 if bidirectional else 1
+        if not rnn_hidden_size:
+            assert hidden_size % self.num_directions == 0
+        else:
+            assert rnn_hidden_size == hidden_size
+        self.rnn_hidden_size = rnn_hidden_size or hidden_size // 2
 
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -213,11 +222,11 @@ class GRUEncoder(nn.Module):
 
             if num_valid < batch_size:
                 zeros = outputs.new_zeros(
-                    batch_size - num_valid, outputs.size(1), self.hidden_size)
+                    batch_size - num_valid, outputs.size(1), self.rnn_hidden_size * self.num_directions)
                 outputs = torch.cat([outputs, zeros], dim=0)
 
                 zeros = last_hidden.new_zeros(
-                    self.num_layers, batch_size - num_valid, self.hidden_size)
+                    self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
                 last_hidden = torch.cat([last_hidden, zeros], dim=1)
 
             _, inv_indices = indices.sort()

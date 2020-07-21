@@ -57,8 +57,8 @@ class MatchCorpus(object):
         super(MatchCorpus, self).__init__()
 
         self.args = args
-        self.data_file = os.path.join(args.output_dir, "data_aug.pt" if self.args.aug else "data.pt")
-        self.field_text_file = os.path.join(args.output_dir, "field_text.pt")
+        self.data_file = os.path.join(args.data_dir, "data_aug.pt" if self.args.aug else "data.pt")
+        self.field_text_file = os.path.join(args.data_dir, "field_text.pt")
 
         self.max_vocab_size = max_vocab_size
         self.min_freq = min_freq

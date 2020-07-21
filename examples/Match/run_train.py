@@ -14,8 +14,10 @@ from ModelConfig import (
     ARCIConfig, ARCIModel,
     ARCIIConfig, ARCIIModel,
     MVLSTMConfig, MVLSTMoel,
-    MatchPyramidConig, MatchPyramidModel)
+    MatchPyramidConig, MatchPyramidModel,
+    MwANConfig, MwANModel)
 from preprocessing import MatchCorpus
+from preprocessing import Example, InputFeatures
 
 from source.utils.engine import BasicConfig
 import source.utils.Constant as constants
@@ -29,14 +31,15 @@ MODEL_CLASSES = {
     "arci": (ARCIConfig, ARCIModel),
     "arcii": (ARCIIConfig, ARCIIModel),
     "mvlstm": (MVLSTMConfig, MVLSTMoel),
-    "matchpyramid": (MatchPyramidConig, MatchPyramidModel)
+    "matchpyramid": (MatchPyramidConig, MatchPyramidModel),
+    "mwan": (MwANConfig, MwANModel)
 }
 
 
 def main():
     parser = BasicConfig()
     model_type = vars(parser.parse_known_args()[0])["model_type"].lower()
-    model_class, configs = MODEL_CLASSES[model_type]
+    configs, model_class = MODEL_CLASSES[model_type]
     args = configs(parser)
 
     args = checkoutput_and_setcuda(args)
@@ -47,7 +50,7 @@ def main():
 
     specials = [constants.PAD_WORD, constants.UNK_WORD]
     processor = MatchCorpus(args, specials=specials)
-    padding_idx = processor.field["article"].stoi[constants.PAD_WORD]
+    padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
 
     embedded_pretrain = Embedder(num_embeddings=processor.field["text"].vocab_size,
                                  embedding_dim=128, padding_idx=padding_idx)
@@ -56,7 +59,7 @@ def main():
 
     logger.info(args)
 
-    model = model_class(args, embedded_pretrain, processor.field["article"].vocab_size, padding_idx)
+    model = model_class(args, embedd=embedded_pretrain)
     model.to(args.device)
 
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
@@ -71,3 +74,20 @@ def main():
 
         args.logging_steps = len(train_dataloader) // args.gradient_accumulation_steps // 5
         args.valid_steps = len(train_dataloader)
+
+        trainer_op = trainer(args=args,
+                             model=model,
+                             optimizer=optimizer,
+                             train_iter=train_dataloader,
+                             valid_iter=eval_dataloader,
+                             logger=logger,
+                             num_epochs=args.num_train_epochs,
+                             save_dir=args.output_dir,
+                             log_steps=args.logging_steps,
+                             valid_steps=args.valid_steps,
+                             valid_metric_name="+f1")
+        trainer_op.train()
+
+
+if __name__ == "__main__":
+    main()
