@@ -8,7 +8,8 @@ import torch.nn.functional as F
 
 from source.modules.activate import parse_activation
 from source.modules.linears import quickly_output_layer, quickly_multi_layer_perceptron_layer
-from source.modules.matching import Matching
+from source.modules.matching import Matching, mp_matching_func, mp_matching_func_pairwise, mp_matching_attention, \
+    div_with_small_value
 from source.modules.encoders.rnn_encoder import LSTMEncoder, GRUEncoder
 
 
@@ -518,7 +519,6 @@ class MatchPyramid(nn.Module):
         out = self.out(embed_flat)
         return out
 
-
     @classmethod
     def quickly_conv_pool_block(
             cls,
@@ -540,7 +540,7 @@ class MatchPyramid(nn.Module):
             ),
             activation
         )
-    
+
 
 # TODO matchSRNN
 class MatchSRNN(nn.Module):
@@ -551,8 +551,8 @@ class MatchSRNN(nn.Module):
 # MwAN
 class MwAN(nn.Module):
     def __init__(self,
+                 args,
                  embedd=None,
-                 hidden_size=128,
                  num_layers=1,
                  activation_func='relu',
                  dropout_rate=0.5,
@@ -563,12 +563,13 @@ class MwAN(nn.Module):
         v1版本，没有忠于原文，仅实现了四种注意力机制。
         原文4.4部分/4.5部分 门控控制输入没有完成。
         """
+        self.args = args
         if embedd is None:
             raise Exception("The embdding layer is None")
         self.embedding = embedd
         self.embedding_dim = embedd.embedding_dim
 
-        self.hidden_size = hidden_size
+        self.hidden_size = args.hidden_size
 
         self.num_layers = num_layers
         self.activation_func = activation_func
@@ -592,21 +593,28 @@ class MwAN(nn.Module):
         # Dot Attention :
         self.Wd = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
         self.Vd = nn.Linear(self.hidden_size, 1, bias=False)
+
         # Minus Attention :
         self.Wm = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
         self.Vm = nn.Linear(self.hidden_size, 1, bias=False)
 
         # gate weight
+        self.Wg = nn.Linear(2 * self.hidden_size * self.num_directions, 1, bias=False)
         # self.Wgc = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
         # self.Wgd = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
         # self.Wgb = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
         # self.Wgm = nn.Linear(2 * self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False)
 
-        # 非原文部分
-        self.Ws = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
-        self.Vs = nn.Linear(self.hidden_size, 1, bias=False)
+        self.gru_inter_agg = nn.GRU(2 * self.num_directions * self.hidden_size, self.hidden_size, batch_first=True,
+                                    bidirectional=True)
 
-        self.gru_agg = nn.GRU(6 * self.num_directions * self.hidden_size, self.hidden_size, batch_first=True, bidirectional=True)
+        # mix aggregation
+        self.Wx = nn.Linear(self.hidden_size * self.num_directions, 1, bias=False)
+        self.vx = nn.Parameter(torch.randn(self.args.max_seq_length, 4))
+        self.Vx = nn.Linear(self.args.max_seq_length, 1, bias=False)
+
+        self.gru_mix_agg = nn.GRU(self.num_directions * self.hidden_size, self.hidden_size, batch_first=True,
+                                  bidirectional=True)
 
         # predict layer
         self.Wp = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
@@ -638,7 +646,7 @@ class MwAN(nn.Module):
         hc, _ = self.c_encoder(c_embedding)
         hc = F.dropout(hc, self.dropout_rate)
 
-        # B,L,D    B,R,D  concat attention
+        # concat attention
         _s1 = self.Wc1(hp).unsqueeze(1)  # B,1,L,D
         _s2 = self.Wc2(hc).unsqueeze(2)  # B,R,1,D
         attn_concat = F.softmax(self.Vc(torch.tanh(_s1 + _s2)).squeeze(), 2)
@@ -659,23 +667,259 @@ class MwAN(nn.Module):
         attn_minus = F.softmax(self.Vm(torch.tanh(self.Wm(_s1 - _s2))).squeeze(), 2)
         minus_rep = attn_minus.bmm(hp)
 
-        _s1 = hc.unsqueeze(1)
-        _s2 = hc.unsqueeze(2)
-        attn_self = F.softmax(self.Vs(torch.tanh(self.Ws(_s1 * _s2))).squeeze(), 2)
-        self_rep = attn_self.bmm(hc)
+        x_concat = self.inside_aggregation((concat_rep, hp))
+        x_billiner = self.inside_aggregation((billiner_rep, hp))
+        x_dot = self.inside_aggregation((dot_rep, hp))
+        x_minus = self.inside_aggregation((minus_rep, hp))
 
-        aggregation = torch.cat([hc, self_rep, concat_rep, dot_rep, billiner_rep, minus_rep], 2)
-        self.gru_agg.flatten_parameters()
-        aggregation_representation, _ = self.gru_agg(aggregation)
+        aggregation = self.mix_aggregation([x_concat, x_billiner, x_dot, x_minus])
 
+        self.gru_mix_agg.flatten_parameters()
+        aggregation_rep, _ = self.gru_mix_agg(aggregation)
+
+        output = self.perdoct_layer([hp, aggregation_rep])
+
+        return output
+
+    def inside_aggregation(self, x):
+        # 原文公式 8a-8e
+        attn_rep, hp = x
+        xj = torch.cat([attn_rep, hp], dim=2)
+        gj = F.sigmoid(self.Wg(xj))
+        xj_ = gj * xj
+        self.gru_inter_agg.flatten_parameters()
+        x, _ = self.gru_inter_agg(xj_)
+        return x
+
+    def mix_aggregation(self, x):
+        # 原文公式 9a-9c
+        xc, xb, xd, xm = x
+        x_cat_temp = torch.cat([xc, xb, xd, xm], dim=2)
+        # B, L, 4, num_direction * rnn_hidden
+        x_cat = x_cat_temp.view([x_cat_temp.size(0), x_cat_temp.size(1), 4, xc.size(2)]).contiguous()
+        # B, L, 4
+        x_cat_ = torch.squeeze(self.Wx(x_cat))
+        # (B, L, 4 + L, 4)-> B, 4, L with L*1 -> B, 4, 1
+        x_cat_v = x_cat_ + self.vx
+        cross_attn = F.softmax(self.Vx(x_cat_v.transpose(2, 1)))
+        # B, L, 1, num_direction * rnn_hidden
+        x = torch.einsum("blad,bac->bldc",
+                         x_cat,
+                         cross_attn).squeeze()
+        # x = cross_attn.bmm(x_cat)
+        return x
+
+    def perdoct_layer(self, x):
+        # 原文公式 11a-11c
         # 比原文少一个 vp向量
+        hp, aggregation_rep = x
         sj = self.Vp(torch.tanh(self.Wp(hp))).transpose(2, 1)
         rp = F.softmax(sj, 2).bmm(hp)
 
         # 原文12a~12c公式
-        sj = F.softmax(self.V(self.W1(aggregation_representation) + self.W2(rp)).transpose(2, 1), 2)
-        rc = sj.bmm(aggregation_representation)
+        sj = F.softmax(self.V(self.W1(aggregation_rep) + self.W2(rp)).transpose(2, 1), 2)
+        rc = sj.bmm(aggregation_rep)
+
         # 归一化
         # encoder_output = F.sigmoid(self.prediction(rc))
         output = self.output(rc.squeeze())
+
         return output
+
+
+# Bimpm
+class bimpm(nn.Module):
+    def __init__(self,
+                 embedd=None,
+                 num_perspective=4,
+                 hidden_size=128,
+                 dropout_rate=0.5, ):
+        super(bimpm, self).__init__()
+
+        if embedd is None:
+            raise Exception("The embdding layer is None")
+        self.embedding = embedd
+        self.embedding_dim = embedd.embedding_dim
+        self.hidden_size = hidden_size
+        self.num_perspective = num_perspective
+
+        self.context_LSTM = nn.LSTM(
+            input_size=self.embedding_dim,
+            hidden_size=self.hidden_size,
+            num_layers=1,
+            bidirectional=True,
+            batch_first=True
+        )
+
+        # Matching Layer
+        for i in range(1, 9):
+            setattr(self, f'mp_w{i}',
+                    nn.Parameter(torch.rand(self.num_perspective,
+                                            self.hidden_size)))
+
+        # Aggregation Layer
+        self.aggregation_LSTM = nn.LSTM(
+            input_size=self.num_perspective * 8,
+            hidden_size=self.hidden_size,
+            num_layers=1,
+            bidirectional=True,
+            batch_first=True
+        )
+
+        # Prediction Layer
+        self.pred_fc1 = nn.Linear(
+            self.hidden_size * 4,
+            self.hidden_size * 2)
+        self.pred_fc2 = quickly_output_layer(
+            task="classify",
+            num_classes=2,
+            in_features=self.hidden_size * 2)
+
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, inputs):
+        p, h = inputs['text_a'], inputs['text_b']
+
+        # [B, L, D]
+        # [B, R, D]
+        p = self.embedding(p)
+        h = self.embedding(h)
+
+        p = self.dropout(p)
+        h = self.dropout(h)
+
+        # Context Representation Layer
+        # (batch, seq_len, hidden_size * 2)
+        self.context_LSTM.flatten_parameters()
+        con_p, _ = self.context_LSTM(p)
+        con_h, _ = self.context_LSTM(h)
+
+        con_p = self.dropout(con_p)
+        con_h = self.dropout(con_h)
+
+        # (batch, seq_len, hidden_size)
+        con_p_fw, con_p_bw = torch.split(con_p,
+                                         self.hidden_size,
+                                         dim=-1)
+        con_h_fw, con_h_bw = torch.split(con_h,
+                                         self.hidden_size,
+                                         dim=-1)
+        # 1. Full-Matching
+
+        # (batch, seq_len, hidden_size), (batch, hidden_size)
+        #   -> (batch, seq_len, num_perspective)
+        mv_p_full_fw = mp_matching_func(
+            con_p_fw, con_h_fw[:, -1, :], self.mp_w1)
+        mv_p_full_bw = mp_matching_func(
+            con_p_bw, con_h_bw[:, 0, :], self.mp_w2)
+        mv_h_full_fw = mp_matching_func(
+            con_h_fw, con_p_fw[:, -1, :], self.mp_w1)
+        mv_h_full_bw = mp_matching_func(
+            con_h_bw, con_p_bw[:, 0, :], self.mp_w2)
+
+        # 2. Maxpooling-Matching
+
+        # (batch, seq_len1, seq_len2, num_perspective)
+        mv_max_fw = mp_matching_func_pairwise(con_p_fw, con_h_fw, self.mp_w3)
+        mv_max_bw = mp_matching_func_pairwise(con_p_bw, con_h_bw, self.mp_w4)
+
+        # (batch, seq_len, num_perspective)
+        mv_p_max_fw, _ = mv_max_fw.max(dim=2)
+        mv_p_max_bw, _ = mv_max_bw.max(dim=2)
+        mv_h_max_fw, _ = mv_max_fw.max(dim=1)
+        mv_h_max_bw, _ = mv_max_bw.max(dim=1)
+
+        # 3. Attentive-Matching
+
+        # (batch, seq_len1, seq_len2)
+        att_fw = mp_matching_attention(con_p_fw, con_h_fw)
+        att_bw = mp_matching_attention(con_p_bw, con_h_bw)
+
+        # (batch, seq_len2, hidden_size) -> (batch, 1, seq_len2, hidden_size)
+        # (batch, seq_len1, seq_len2) -> (batch, seq_len1, seq_len2, 1)
+        # output:  -> (batch, seq_len1, seq_len2, hidden_size)
+        att_h_fw = con_h_fw.unsqueeze(1) * att_fw.unsqueeze(3)
+        att_h_bw = con_h_bw.unsqueeze(1) * att_bw.unsqueeze(3)
+        # (batch, seq_len1, hidden_size) -> (batch, seq_len1, 1, hidden_size)
+        # (batch, seq_len1, seq_len2) -> (batch, seq_len1, seq_len2, 1)
+        # output:  -> (batch, seq_len1, seq_len2, hidden_size)
+        att_p_fw = con_p_fw.unsqueeze(2) * att_fw.unsqueeze(3)
+        att_p_bw = con_p_bw.unsqueeze(2) * att_bw.unsqueeze(3)
+
+        # (batch, seq_len1, hidden_size) / (batch, seq_len1, 1)
+        # output:  -> (batch, seq_len1, hidden_size)
+        att_mean_h_fw = div_with_small_value(
+            att_h_fw.sum(dim=2),
+            att_fw.sum(dim=2, keepdim=True))
+        att_mean_h_bw = div_with_small_value(
+            att_h_bw.sum(dim=2),
+            att_bw.sum(dim=2, keepdim=True))
+        # (batch, seq_len2, hidden_size) / (batch, seq_len2, 1)
+        # output:  -> (batch, seq_len2, hidden_size)
+        att_mean_p_fw = div_with_small_value(
+            att_p_fw.sum(dim=1),
+            att_fw.sum(dim=1, keepdim=True).permute(0, 2, 1))
+        att_mean_p_bw = div_with_small_value(
+            att_p_bw.sum(dim=1),
+            att_bw.sum(dim=1, keepdim=True).permute(0, 2, 1))
+
+        # (batch, seq_len, num_perspective)
+        mv_p_att_mean_fw = mp_matching_func(
+            con_p_fw, att_mean_h_fw, self.mp_w5)
+        mv_p_att_mean_bw = mp_matching_func(
+            con_p_bw, att_mean_h_bw, self.mp_w6)
+        mv_h_att_mean_fw = mp_matching_func(
+            con_h_fw, att_mean_p_fw, self.mp_w5)
+        mv_h_att_mean_bw = mp_matching_func(
+            con_h_bw, att_mean_p_bw, self.mp_w6)
+
+        # 4. Max-Attentive-Matching
+
+        # (batch, seq_len1, hidden_size)
+        att_max_h_fw, _ = att_h_fw.max(dim=2)
+        att_max_h_bw, _ = att_h_bw.max(dim=2)
+        # (batch, seq_len2, hidden_size)
+        att_max_p_fw, _ = att_p_fw.max(dim=1)
+        att_max_p_bw, _ = att_p_bw.max(dim=1)
+
+        # (batch, seq_len, num_perspective)
+        mv_p_att_max_fw = mp_matching_func(con_p_fw, att_max_h_fw, self.mp_w7)
+        mv_p_att_max_bw = mp_matching_func(con_p_bw, att_max_h_bw, self.mp_w8)
+        mv_h_att_max_fw = mp_matching_func(con_h_fw, att_max_p_fw, self.mp_w7)
+        mv_h_att_max_bw = mp_matching_func(con_h_bw, att_max_p_bw, self.mp_w8)
+
+        # (batch, seq_len, num_perspective * 8)
+        mv_p = torch.cat(
+            [mv_p_full_fw, mv_p_max_fw, mv_p_att_mean_fw, mv_p_att_max_fw,
+             mv_p_full_bw, mv_p_max_bw, mv_p_att_mean_bw, mv_p_att_max_bw],
+            dim=2)
+        mv_h = torch.cat(
+            [mv_h_full_fw, mv_h_max_fw, mv_h_att_mean_fw, mv_h_att_max_fw,
+             mv_h_full_bw, mv_h_max_bw, mv_h_att_mean_bw, mv_h_att_max_bw],
+            dim=2)
+
+        mv_p = self.dropout(mv_p)
+        mv_h = self.dropout(mv_h)
+
+        # Aggregation Layer
+        # (batch, seq_len, num_perspective * 8) -> (2, batch, hidden_size)
+        self.aggregation_LSTM.flatten_parameters()
+        _, (agg_p_last, _) = self.aggregation_LSTM(mv_p)
+        _, (agg_h_last, _) = self.aggregation_LSTM(mv_h)
+
+        # 2 * (2, batch, hidden_size) -> 2 * (batch, hidden_size * 2)
+        #   -> (batch, hidden_size * 4)
+        x = torch.cat(
+            [agg_p_last.permute(1, 0, 2).contiguous().view(
+                -1, self.hidden_size * 2),
+                agg_h_last.permute(1, 0, 2).contiguous().view(
+                    -1, self.hidden_size * 2)],
+            dim=1)
+        x = self.dropout(x)
+
+        # Prediction Layer
+        x = torch.tanh(self.pred_fc1(x))
+        x = self.dropout(x)
+        x = self.pred_fc2(x)
+
+        return x

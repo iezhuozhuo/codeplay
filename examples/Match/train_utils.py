@@ -26,10 +26,10 @@ def cal_performance(preds, labels):
 
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
-                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, save_summary=False):
+                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None, save_summary=False):
 
         super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, num_epochs,
-                         save_dir, log_steps, valid_steps, grad_clip, lr_scheduler, save_summary)
+                         save_dir, log_steps, valid_steps, grad_clip, lr_scheduler, model_log, save_summary)
 
         self.args = args
         self.model = model
@@ -47,6 +47,7 @@ class trainer(Trainer):
         self.grad_clip = grad_clip
         self.lr_scheduler = lr_scheduler
         self.save_summary = save_summary
+        self.model_log = model_log
 
         if self.save_summary:
             self.train_writer = SummaryWriter(
@@ -113,14 +114,24 @@ class trainer(Trainer):
                 self.model.to(self.args.device)
                 metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
                 cur_valid_metric = metrics[self.valid_metric_name]
+                self.model_log.add_metric(metric_name='test_loss', metric_value=metrics["loss"], epoch=self.epoch)
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric
                 else:
                     is_best = cur_valid_metric > self.best_valid_metric
                 if is_best:
                     self.best_valid_metric = cur_valid_metric
+                    self.model_log.add_best_result(
+                        best_name="best_"+self.valid_metric_name, best_value=cur_valid_metric, best_epoch=self.epoch)
                 self.save(is_best)
+                self.model_log.add_metric(metric_name="test_F1", metric_value=metrics["f1"], epoch=self.epoch)
+                self.model_log.add_metric(metric_name="test_acc", metric_value=metrics["acc"], epoch=self.epoch)
+
                 self.logger.info("-" * 85 + "\n")
+        loss_epoch = tr_loss / nb_tr_steps
+        self.model_log.add_metric(metric_name='train_loss', metric_value=loss_epoch, epoch=self.epoch)
+        # self.model_log.add_metric(
+        #     metric_name="lr", metric_value=self.optimizer.state_dict()['param_groups'][0]['lr'], epoch=self.epoch)
 
     def train(self):
         if self.args.max_steps > 0:

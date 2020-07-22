@@ -3,7 +3,7 @@
 # @github: iezhuozhuo
 # @vaws: Making Code Great Again!
 
-from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN
+from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN, bimpm
 
 
 def ARCIConfig(parser):
@@ -89,8 +89,8 @@ def MatchSRNNConfig():
 
 def MwANModel(args, embedd):
     model = MwAN(
+        args=args,
         embedd=embedd,
-        hidden_size=args.hidden_size,
         num_layers=1,
         activation_func='relu',
         dropout_rate=0.5,
@@ -99,6 +99,24 @@ def MwANModel(args, embedd):
 
 
 def MwANConfig(parser):
+    parser.add_argument("--hidden_size", default=128, type=int)
+    parser.add_argument("--aug", action="store_true")
+    args, _ = parser.parse_known_args()
+    return args
+
+
+def BiMPMModule(args, embedd):
+    model = bimpm(
+        embedd=embedd,
+        num_perspective=args.num_perspective,
+        hidden_size=args.hidden_size,
+        dropout_rate=0.5
+    )
+    return model
+
+
+def BiMPMConfig(parser):
+    parser.add_argument("--num_perspective", default=4, type=int)
     parser.add_argument("--hidden_size", default=128, type=int)
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()

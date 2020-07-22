@@ -134,3 +134,92 @@ class MatchingTensor(nn.Module):
             x, self.interaction_matrix, y
         )
         return output
+
+
+def mp_matching_func(v1, v2, w):
+    """
+    Basic mp_matching_func.
+    :param v1: (batch, seq_len, hidden_size)
+    :param v2: (batch, seq_len, hidden_size) or (batch, hidden_size)
+    :param w: (num_psp, hidden_size)
+    :return: (batch, seq_len, num_psp)
+    """
+
+    seq_len = v1.size(1)
+    num_psp = w.size(0)
+
+    # (1, 1, hidden_size, num_psp)
+    w = w.transpose(1, 0).unsqueeze(0).unsqueeze(0)
+    # (batch, seq_len, hidden_size, num_psp)
+    v1 = w * torch.stack([v1] * num_psp, dim=3)
+    if len(v2.size()) == 3:
+        v2 = w * torch.stack([v2] * num_psp, dim=3)
+    else:
+        v2 = w * torch.stack(
+            [torch.stack([v2] * seq_len, dim=1)] * num_psp, dim=3)
+
+    m = F.cosine_similarity(v1, v2, dim=2)
+
+    return m
+
+
+def mp_matching_func_pairwise(v1, v2, w):
+    """
+    Basic mp_matching_func_pairwise.
+    :param v1: (batch, seq_len1, hidden_size)
+    :param v2: (batch, seq_len2, hidden_size)
+    :param w: (num_psp, hidden_size)
+    :param num_psp
+    :return: (batch, num_psp, seq_len1, seq_len2)
+    """
+
+    num_psp = w.size(0)
+
+    # (1, num_psp, 1, hidden_size)
+    w = w.unsqueeze(0).unsqueeze(2)
+    # (batch, num_psp, seq_len, hidden_size)
+    v1, v2 = (w * torch.stack([v1] * num_psp, dim=1),
+              w * torch.stack([v2] * num_psp, dim=1))
+    # (batch, num_psp, seq_len, hidden_size->1)
+    v1_norm = v1.norm(p=2, dim=3, keepdim=True)
+    v2_norm = v2.norm(p=2, dim=3, keepdim=True)
+
+    # (batch, num_psp, seq_len1, seq_len2)
+    n = torch.matmul(v1, v2.transpose(2, 3))
+    d = v1_norm * v2_norm.transpose(2, 3)
+
+    # (batch, seq_len1, seq_len2, num_psp)
+    m = div_with_small_value(n, d).permute(0, 2, 3, 1)
+
+    return m
+
+
+def mp_matching_attention(v1, v2):
+    """
+    Attention.
+    :param v1: (batch, seq_len1, hidden_size)
+    :param v2: (batch, seq_len2, hidden_size)
+    :return: (batch, seq_len1, seq_len2)
+    """
+
+    # (batch, seq_len1, 1)
+    v1_norm = v1.norm(p=2, dim=2, keepdim=True)
+    # (batch, 1, seq_len2)
+    v2_norm = v2.norm(p=2, dim=2, keepdim=True).permute(0, 2, 1)
+
+    # (batch, seq_len1, seq_len2)
+    a = torch.bmm(v1, v2.permute(0, 2, 1))
+    d = v1_norm * v2_norm  # 和矩阵乘得到的维度相似如[2,2,1]*[2,1,2]->[2,2,2]，但是不是向量乘加和而是直接点乘不用相加
+
+    return div_with_small_value(a, d)
+
+
+def div_with_small_value(n, d, eps=1e-8):
+    """
+    Small values are replaced by 1e-8 to prevent it from exploding.
+    :param n: tensor
+    :param d: tensor
+    :return: n/d: tensor
+    """
+    d = d * (d > eps).float() + eps * (d <= eps).float()
+    return n / d

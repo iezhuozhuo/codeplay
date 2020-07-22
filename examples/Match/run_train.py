@@ -6,6 +6,7 @@
 import os
 import random
 import numpy as np
+from model_log.modellog import ModelLog
 
 from torch.optim import Adam
 
@@ -15,7 +16,9 @@ from ModelConfig import (
     ARCIIConfig, ARCIIModel,
     MVLSTMConfig, MVLSTMoel,
     MatchPyramidConig, MatchPyramidModel,
-    MwANConfig, MwANModel)
+    MwANConfig, MwANModel,
+    BiMPMConfig, BiMPMModule
+)
 from preprocessing import MatchCorpus
 from preprocessing import Example, InputFeatures
 
@@ -32,7 +35,8 @@ MODEL_CLASSES = {
     "arcii": (ARCIIConfig, ARCIIModel),
     "mvlstm": (MVLSTMConfig, MVLSTMoel),
     "matchpyramid": (MatchPyramidConig, MatchPyramidModel),
-    "mwan": (MwANConfig, MwANModel)
+    "mwan": (MwANConfig, MwANModel),
+    "bimpm": (BiMPMConfig, BiMPMModule)
 }
 
 
@@ -44,9 +48,14 @@ def main():
 
     args = checkoutput_and_setcuda(args)
     logger = init_logger(args)
-
+    logger.info("Load {} model".format(args.model_type))
     # Set seed
     set_seed(args)
+
+    model_log = ModelLog(nick_name='zhuo', project_name='DeepMatch', project_remark='')
+    model_log.add_model_name(model_name=args.model_type.upper())
+    model_log.add_model_remark(remark='不使用aug')
+    model_log.add_param(param_dict=vars(args), param_type='py_param')
 
     specials = [constants.PAD_WORD, constants.UNK_WORD]
     processor = MatchCorpus(args, specials=specials)
@@ -85,7 +94,8 @@ def main():
                              save_dir=args.output_dir,
                              log_steps=args.logging_steps,
                              valid_steps=args.valid_steps,
-                             valid_metric_name="+f1")
+                             valid_metric_name="+f1",
+                             model_log=model_log)
         trainer_op.train()
 
 
