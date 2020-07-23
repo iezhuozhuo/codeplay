@@ -18,7 +18,8 @@ from ModelConfig import (
     MatchPyramidConig, MatchPyramidModel,
     MwANConfig, MwANModel,
     BiMPMConfig, BiMPMModule,
-    ESIMConfig, ESIMModel
+    ESIMConfig, ESIMModel,
+    DIINConfig, DIINModel
 )
 from preprocessing import MatchCorpus
 from preprocessing import Example, InputFeatures
@@ -38,7 +39,8 @@ MODEL_CLASSES = {
     "matchpyramid": (MatchPyramidConig, MatchPyramidModel),
     "mwan": (MwANConfig, MwANModel),
     "bimpm": (BiMPMConfig, BiMPMModule),
-    "esim": (ESIMConfig, ESIMModel)
+    "esim": (ESIMConfig, ESIMModel),
+    "diin": (DIINConfig, DIINModel)
 }
 
 
@@ -65,6 +67,7 @@ def main():
     processor = MatchCorpus(args, specials=specials)
     padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
     args.padding_idx = padding_idx
+    args.num_char_embedding = len(processor.field["char"].stoi)
     embedded_pretrain = Embedder(num_embeddings=processor.field["text"].vocab_size,
                                  embedding_dim=128, padding_idx=padding_idx)
     embedded_pretrain.load_embeddingsfor_gensim_vec("/home/gong/zz/data/Match/word2vec.model",

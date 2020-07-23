@@ -20,11 +20,11 @@ import source.utils.Constant as constants
 from source.inputters.field import TextField, NumberField
 
 logger = init_logger()
-user_dict_name = "/home/administrator4/ZDY/dataset/similarity/dict_all.txt"
+user_dict_name = "/home/gong/zz/data/Match/dict_all.txt"
 logger.info("loading {} user_dict".format(user_dict_name))
 jieba.load_userdict(user_dict_name)
 
-stopwords_file = "/home/administrator4/ZDY/dataset/similarity/stop_words.txt"
+stopwords_file = "/home/gong/zz/data/Match/stop_words.txt"
 logger.info("loading {} stop word".format(stopwords_file))
 stopwords = {line.strip(): 0 for line in open(stopwords_file, 'r', encoding="utf-8").readlines()}
 
@@ -52,9 +52,6 @@ class InputFeatures(object):
         self.left_chars_len = left_chars_len
         self.right_chars_len = right_chars_len
         self.label = label
-
-
-
 
 
 class MatchCorpus(object):
@@ -215,11 +212,22 @@ class MatchCorpus(object):
         text_char_field = torch.load(self.field_char_file)
         self.field["text"].load(text_field)
         self.field["char"].load(text_char_field)
+
     def create_batch(self, data_type="train"):
         examples = self.data[data_type]
         # FIXME Check example num
         # examples = examples[0:1024]
-        features = self.convert_examples_to_features(examples)
+        features_cache_path = os.path.join(
+            self.args.data_dir,
+            "features-{}-{}-{}.pt".format(data_type, self.args.max_seq_length, "aug" if self.args.aug else "no-aug")
+        )
+        if os.path.exists(features_cache_path):
+            logger.info("Loading prepared features from {} ...".format(features_cache_path))
+            features = torch.load(features_cache_path)
+        else:
+            logger.info("Convert examples to features")
+            features = self.convert_examples_to_features(examples)
+            torch.save(features, features_cache_path)
         all_left_id = torch.tensor([f.left_ids for f in features], dtype=torch.long)
         all_right_id = torch.tensor([f.right_ids for f in features], dtype=torch.long)
         all_left_char_id = torch.tensor([f.left_char_ids for f in features], dtype=torch.long)
@@ -355,6 +363,7 @@ class MatchCorpus(object):
         seq += [pad_id] * padding_length
         return seq
 
+
 if __name__ == "__main__":
     import argparse
     # from source.utils.misc import checkoutput_and_setcuda
@@ -388,6 +397,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_seq_length",
         default=32,
+        type=int,
+    )
+    parser.add_argument(
+        "--max_char_seq_length",
+        default=5,
         type=int,
     )
     parser.add_argument("--aug", action="store_true")

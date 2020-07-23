@@ -75,14 +75,6 @@ class CharacterEmbedding(nn.Module):
     :param char_embedding_output_dim: The output dimension of character embedding layer.
     :param char_conv_filters: The filter size of character convolution layer.
     :param char_conv_kernel_size: The kernel size of character convolution layer.
-    Examples:
-        >>> import torch
-        >>> character_embedding = CharacterEmbedding()
-        >>> x = torch.ones(10, 32, 16, dtype=torch.long)
-        >>> x.shape
-        torch.Size([10, 32, 16])
-        >>> character_embedding(x).shape
-        torch.Size([10, 32, 100])
     """
 
     def __init__(

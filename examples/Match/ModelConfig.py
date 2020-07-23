@@ -3,7 +3,7 @@
 # @github: iezhuozhuo
 # @vaws: Making Code Great Again!
 
-from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN, bimpm,ESIM
+from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN, bimpm, ESIM, DIIN
 
 
 def ARCIConfig(parser):
@@ -143,3 +143,31 @@ def ESIMConfig(parser):
     args, _ = parser.parse_known_args()
     return args
 
+
+def DIINModel(args, embedd):
+    model = DIIN(
+        args=args,
+        embedd=embedd,
+        conv_kernel_size=(3, 3),
+        pool_kernel_size=(2, 2),
+        dropout_rate=0.2,
+        first_scale_down_ratio=0.3,
+        transition_scale_down_ratio=0.5,
+        padding_indx=args.padding_idx
+    )
+    return model
+
+
+def DIINConfig(parser):
+    parser.add_argument("--hidden_size", default=128, type=int)
+    parser.add_argument("--aug", action="store_true")
+    parser.add_argument("--use_char", action="store_true")
+    parser.add_argument('--char_embedding_dim', default=8, type=int)
+    parser.add_argument('--char_conv_filters', default=100, type=int)
+    parser.add_argument('--char_conv_kernel_size', default=5, type=int)
+    parser.add_argument('--nb_dense_blocks', default=3, type=int)
+    parser.add_argument('--layers_per_dense_block', default=8, type=int)
+    parser.add_argument('--growth_rate', default=20, type=int)
+    parser.add_argument("--max_char_seq_length", default=5, type=int)
+    args, _ = parser.parse_known_args()
+    return args

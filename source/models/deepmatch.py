@@ -12,6 +12,8 @@ from source.modules.matching import Matching, mp_matching_func, mp_matching_func
     div_with_small_value
 from source.modules.encoders.rnn_encoder import LSTMEncoder, GRUEncoder, StackedBRNN
 from source.modules.attention import BidirectionalAttention
+from source.modules.embedder import CharacterEmbedding
+from source.modules.densenet import DenseNet, SemanticComposite
 
 
 class ArcI(nn.Module):
@@ -1111,12 +1113,18 @@ class DIIN(nn.Module):
     def __init__(self,
                  args,
                  embedd,
-                 dropout_rate=0.2):
+                 conv_kernel_size: tuple = (3, 3),
+                 pool_kernel_size: tuple = (2, 2),
+                 dropout_rate: float = 0.2,
+                 first_scale_down_ratio: float = 0.3,
+                 transition_scale_down_ratio: float = 0.5,
+                 padding_indx: int = 0):
         super(DIIN, self).__init__()
 
         """
         Deep Interactive Inference Network (IIN) consists of five component:
         embedding layer, encoding layer, interaction layer, feature extraction layer, and output layer.
+        paper link: https://arxiv.org/pdf/1709.04348.pdf
         """
         self.args = args
 
@@ -1125,11 +1133,139 @@ class DIIN(nn.Module):
         self.embedding = embedd
         self.embedding_dim = embedd.embedding_dim
         self.padding_idx = args.padding_idx
-        self.char_embedding_input_dim = args.char_embedding_input_dim
-        self.char_embedding_output_dim = args.char_embedding_output_dim
+        self.num_char_embedding = args.num_char_embedding
+        self.char_embedding_dim = args.char_embedding_dim
         self.char_conv_filters = args.char_conv_filters
         self.char_conv_kernel_size = args.char_conv_kernel_size
-        self.conv_kernel_size = args.conv_kernel_size
-        self.pool_kernel_size = args.pool_kernel_size
 
+        self.first_scale_down_ratio = first_scale_down_ratio
+        self.transition_scale_down_ratio = transition_scale_down_ratio
+        self.nb_dense_blocks = args.nb_dense_blocks
+        self.layers_per_dense_block = args.layers_per_dense_block
+        self.growth_rate = args.growth_rate
+        self.conv_kernel_size = conv_kernel_size
+        self.pool_kernel_size = pool_kernel_size
         self.dropout_rate = dropout_rate
+        self.padding_idx = padding_indx
+
+        self.build()
+
+    def build(self):
+        if self.args.use_char:
+            self.char_embedding = CharacterEmbedding(
+                char_embedding_input_dim=self.num_char_embedding,
+                char_embedding_output_dim=self.char_embedding_dim,
+                char_conv_filters=self.char_conv_filters,
+                char_conv_kernel_size=self.char_conv_kernel_size
+            )
+            all_embed_dim = self.embedding_dim + self.char_conv_filters + 1
+        else:
+            all_embed_dim = self.embedding_dim + 1
+
+        self.exact_maching = Matching(matching_type='exact')
+
+        # Encoding
+        self.left_encoder = SemanticComposite(
+            all_embed_dim, self.dropout_rate)
+        self.right_encoder = SemanticComposite(
+            all_embed_dim, self.dropout_rate)
+
+        # Interaction 原文公式(7)
+        self.matching = Matching(matching_type='mul')
+
+        # Feature Extraction
+        self.conv = nn.Conv2d(
+            in_channels=all_embed_dim,
+            out_channels=int(all_embed_dim * self.first_scale_down_ratio),
+            kernel_size=1
+        )
+        self.dense_net = DenseNet(
+            in_channels=int(all_embed_dim * self.first_scale_down_ratio),
+            nb_dense_blocks=self.nb_dense_blocks,
+            layers_per_dense_block=self.layers_per_dense_block,
+            growth_rate=self.growth_rate,
+            transition_scale_down_ratio=self.transition_scale_down_ratio,
+            conv_kernel_size=self.conv_kernel_size,
+            pool_kernel_size=self.pool_kernel_size
+        )
+        self.max_pooling = nn.AdaptiveMaxPool2d((1, 1))
+
+        # Output
+        self.out_layer = quickly_output_layer(
+            task="classify",
+            num_classes=2,
+            in_features=self.dense_net.out_channels)
+
+        self.dropout = nn.Dropout(p=self.dropout_rate)
+
+    def forward(self, inputs):
+        # shape = [B, L]   shape = [B, R]
+        input_word_left, input_word_right = inputs['text_a'], inputs['text_b']
+        mask_word_left = (input_word_left == self.padding_idx)
+        mask_word_right = (input_word_right == self.padding_idx)
+
+        # shape = [B, L, D1]   shape = [B, R, D1]
+        embed_word_left = self.dropout(self.embedding(input_word_left))
+        embed_word_right = self.dropout(self.embedding(input_word_right))
+
+        # shape = [B, L, 1]  shape = [B, R, 1]
+        exact_match_left, exact_match_right = self.exact_maching(
+            input_word_left, input_word_right)
+        exact_match_left = exact_match_left.masked_fill(mask_word_left, 0)
+        exact_match_right = exact_match_right.masked_fill(mask_word_right, 0)
+        exact_match_left = torch.unsqueeze(exact_match_left, dim=-1)
+        exact_match_right = torch.unsqueeze(exact_match_right, dim=-1)
+
+        if self.args.use_char:
+            # shape = [B, L, C]    shape = [B, R, C]
+            input_char_left, input_char_right = inputs['text_a_char'], inputs['text_b_char']
+            # shape = [B, L, D2]  shape = [B, R, D2]
+            embed_char_left = self.dropout(self.char_embedding(input_char_left))
+            embed_char_right = self.dropout(self.char_embedding(input_char_right))
+            # shape = [B, L, D]   shape = [B, R, D]
+            embed_left = torch.cat(
+                [embed_word_left, embed_char_left, exact_match_left], dim=-1)
+            embed_right = torch.cat(
+                [embed_word_right, embed_char_right, exact_match_right], dim=-1)
+        else:
+            embed_left = torch.cat(
+                [embed_word_left, exact_match_left], dim=-1)
+            embed_right = torch.cat(
+                [embed_word_right, exact_match_right], dim=-1)
+
+        encode_left = self.left_encoder(embed_left)
+        encode_right = self.right_encoder(embed_right)
+
+        # shape = [B, L, R, D]
+        interaction = self.matching(encode_left, encode_right)
+
+        interaction = self.conv(self.dropout(interaction.permute(0, 3, 1, 2)))
+        interaction = self.dense_net(interaction)
+        interaction = self.max_pooling(interaction).squeeze(dim=-1).squeeze(dim=-1)
+
+        output = self.out_layer(interaction)
+        return output
+
+    def SemanticComposite(self, x):
+        # 原文公式 (1)~(6)
+        seq_length = x.shape[1]
+
+        x_1 = x.unsqueeze(dim=2).repeat(1, 1, seq_length, 1)
+        x_2 = x.unsqueeze(dim=1).repeat(1, seq_length, 1, 1)
+        x_concat = torch.cat([x_1, x_2, x_1 * x_2], dim=-1)
+
+        # Self-attention layer.
+        x_concat = self.dropout(x_concat)
+        attn_matrix = self.att_linear(x_concat).squeeze(dim=-1)
+        attn_weight = torch.softmax(attn_matrix, dim=2)
+        attn = torch.bmm(attn_weight, x)
+
+        # Semantic composite fuse gate.
+        x_attn_concat = self.dropout(torch.cat([x, attn], dim=-1))
+        # x_attn_concat = torch.cat([x, attn], dim=-1)
+        z = torch.tanh(self.z_gate(x_attn_concat))
+        r = torch.sigmoid(self.r_gate(x_attn_concat))
+        f = torch.sigmoid(self.f_gate(x_attn_concat))
+        encoding = r * x + f * z
+
+        return encoding
