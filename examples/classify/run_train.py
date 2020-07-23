@@ -55,7 +55,7 @@ def main():
                         embedded_pretrain=embedded_pretrain,
                         n_vocab=processor.field["text"].vocab_size,
                         padding_idx=padding_idx)
-
+    model.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
     # Training

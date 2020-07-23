@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="gong@10.112.251.61:22 password" autoUploadExternalChanges="true">
+  <component name="PublishConfigData" autoUpload="Always" autoUploadExternalChanges="true">
     <serverData>
-      <paths name="gong@10.112.251.61:22 password">
+      <paths name="administrator4@10.108.103.170:22">
         <serverdata>
           <mappings>
-            <mapping deploy="/" local="$PROJECT_DIR$" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
-      <paths name="lab_new">
+      <paths name="实验室721">
         <serverdata>
           <mappings>
             <mapping deploy="/" local="$PROJECT_DIR$" web="/" />

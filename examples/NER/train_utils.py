@@ -311,8 +311,7 @@ class trainer(Trainer):
 
     def save(self, is_best=False, save_mode="best"):
         model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
-        model_file = os.path.join(
-            self.save_dir, model_file_name)
+        model_file = self.save_dir
         model_to_save = (self.model.module if hasattr(self.model, "module") else self.model)
         if "bert" in self.args.model_type:
             model_to_save.save_pretrained(model_file)

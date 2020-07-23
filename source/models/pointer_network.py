@@ -66,7 +66,7 @@ class PointerNet(nn.Module):
     def forward(self,
                 article_ids, article_len, article_mask, article_ids_extend_vocab,
                 summary_input_ids, summary_taget_ids, summary_mask, summary_len,
-                h_context, extra_zeros, coverage, ):
+                h_context, extra_zeros, coverage,):
 
         encoder_outputs, encoder_feature, encoder_hidden = self.encoder((article_ids, article_len))
 

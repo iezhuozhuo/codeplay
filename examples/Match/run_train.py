@@ -6,7 +6,6 @@
 import os
 import random
 import numpy as np
-from model_log.modellog import ModelLog
 
 from torch.optim import Adam
 
@@ -14,13 +13,9 @@ from train_utils import trainer
 from ModelConfig import (
     ARCIConfig, ARCIModel,
     ARCIIConfig, ARCIIModel,
-    MVLSTMConfig, MVLSTMoel,
-    MatchPyramidConig, MatchPyramidModel,
-    MwANConfig, MwANModel,
-    BiMPMConfig, BiMPMModule
-)
+    MVLSTMConfig, MVLSTModel,
+    MatchPyramidConig, MatchPyramidModel, BiMPM)
 from preprocessing import MatchCorpus
-from preprocessing import Example, InputFeatures
 
 from source.utils.engine import BasicConfig
 import source.utils.Constant as constants
@@ -33,10 +28,9 @@ from source.modules.embedder import Embedder
 MODEL_CLASSES = {
     "arci": (ARCIConfig, ARCIModel),
     "arcii": (ARCIIConfig, ARCIIModel),
-    "mvlstm": (MVLSTMConfig, MVLSTMoel),
+    "mv_lstm": (MVLSTMConfig, MVLSTModel),
     "matchpyramid": (MatchPyramidConig, MatchPyramidModel),
-    "mwan": (MwANConfig, MwANModel),
-    "bimpm": (BiMPMConfig, BiMPMModule)
+    "bimpm": (MVLSTMConfig, BiMPM)
 }
 
 
@@ -48,14 +42,9 @@ def main():
 
     args = checkoutput_and_setcuda(args)
     logger = init_logger(args)
-    logger.info("Load {} model".format(args.model_type))
+
     # Set seed
     set_seed(args)
-
-    model_log = ModelLog(nick_name='zhuo', project_name='DeepMatch', project_remark='')
-    model_log.add_model_name(model_name=args.model_type.upper())
-    model_log.add_model_remark(remark='不使用aug')
-    model_log.add_param(param_dict=vars(args), param_type='py_param')
 
     specials = [constants.PAD_WORD, constants.UNK_WORD]
     processor = MatchCorpus(args, specials=specials)
@@ -63,12 +52,12 @@ def main():
 
     embedded_pretrain = Embedder(num_embeddings=processor.field["text"].vocab_size,
                                  embedding_dim=128, padding_idx=padding_idx)
-    embedded_pretrain.load_embeddingsfor_gensim_vec("/home/gong/zz/data/Match/word2vec.model",
-                                                    processor.field["text"].stoi)
+    # embedded_pretrain.load_embeddingsfor_gensim_vec("/home/administrator4/codeplay/source/utils/word2vec.model",
+    #                                                 processor.field["text"].stoi)
 
     logger.info(args)
 
-    model = model_class(args, embedd=embedded_pretrain)
+    model = model_class(args, embedded_pretrain, processor.field["text"].vocab_size, padding_idx)
     model.to(args.device)
 
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
@@ -94,10 +83,9 @@ def main():
                              save_dir=args.output_dir,
                              log_steps=args.logging_steps,
                              valid_steps=args.valid_steps,
-                             valid_metric_name="+f1",
-                             model_log=model_log)
+                             valid_metric_name="-loss",
+                             processor=processor)
         trainer_op.train()
-
 
 if __name__ == "__main__":
     main()

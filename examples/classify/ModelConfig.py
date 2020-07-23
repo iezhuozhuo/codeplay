@@ -84,7 +84,7 @@ def DPCNNConfig(parser):
     )
     parser.add_argument(
         "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
+        default="D:\\BaiduNetdiskDownload\\sgns.sogou.char",
         # default=None,
         type=str,
         help="The input pretrain embedded file.",
@@ -113,7 +113,7 @@ def TextRNNConfig(parser):
     )
     parser.add_argument(
         "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
+        default="D:\\BaiduNetdiskDownload\\sgns.sogou.char",
         # default=None,
         type=str,
         help="The input pretrain embedded file.",
@@ -141,7 +141,7 @@ def TextCNNConfig(parser):
     )
     parser.add_argument(
         "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
+        default="D:\\BaiduNetdiskDownload\\sgns.sogou.char",
         # default=None,
         type=str,
         help="The input pretrain embedded file.",
@@ -174,7 +174,7 @@ def TransformerClassifierConfig(parser):
     )
     parser.add_argument(
         "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
+        default="D:\\BaiduNetdiskDownload\\sgns.sogou.char",
         # default=None,
         type=str,
         help="The input pretrain embedded file.",
@@ -203,7 +203,7 @@ def FastTextConfig(parser):
     )
     parser.add_argument(
         "--embed_file",
-        default="../../../debug/THUCNews/sgns.sogou.char",
+        default="D:\\BaiduNetdiskDownload\\sgns.sogou.char",
         # default=None,
         type=str,
         help="The input pretrain embedded file.",

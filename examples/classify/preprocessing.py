@@ -5,7 +5,7 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
-from torchtext.data import Field, TabularDataset
+# from torchtext.data import Field, TabularDataset
 
 import source.utils.Constant as constants
 from source.inputters.corpus import Corpus
@@ -267,7 +267,7 @@ class ClassifierCorpus(object):
         self.field["text"].load(field)
 
     def create_batch(self, data_type="train"):
-        examples = self.data[data_type][0:1024]
+        examples = self.data[data_type]
         all_inputs_id = torch.tensor([f[0] for f in examples], dtype=torch.long)
         all_inputs_label = torch.tensor([f[1] for f in examples], dtype=torch.long)
         all_inputs_len = torch.tensor([f[2] for f in examples], dtype=torch.long)

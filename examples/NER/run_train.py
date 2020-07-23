@@ -47,7 +47,7 @@ def main():
                         embedded_pretrain=embedded_pretrain,
                         vocab_size=processor.field["text"].vocab_size,
                         padding_idx=padding_idx)
-
+    model.to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
     # Training

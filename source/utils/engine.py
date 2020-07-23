@@ -1,5 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+################################################################################
+#
+# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
+#
+################################################################################
+"""
+File: source/utils/engine.py
+"""
 
 import os
 import argparse
@@ -88,7 +96,7 @@ def BasicConfig():
         help="The input test file.",
     )
     parser.add_argument(
-        "--num_train_epochs", default=5.0, type=float, help="Total number of training epochs to perform."
+        "--num_train_epochs", default=30.0, type=float, help="Total number of training epochs to perform."
     )
     parser.add_argument(
         "--per_gpu_train_batch_size", default=32, type=int, help="Batch size per GPU/CPU for training."
@@ -98,7 +106,7 @@ def BasicConfig():
     )
     parser.add_argument(
         "--max_seq_length",
-        default=64,
+        default=25,
         type=int,
         help="The maximum total input sequence length after WordPiece tokenization. Sequences "
              "longer than this will be truncated, and sequences shorter than this will be padded.",
@@ -207,7 +215,6 @@ class Trainer(object):
                  valid_steps=None,
                  grad_clip=None,
                  lr_scheduler=None,
-                 model_log=None,
                  save_summary=False):
         self.args = args
         self.model = model
@@ -226,7 +233,6 @@ class Trainer(object):
         self.grad_clip = grad_clip
         self.lr_scheduler = lr_scheduler
         self.save_summary = save_summary
-        self.model_log = model_log
 
         if self.save_summary:
             self.train_writer = SummaryWriter(
@@ -264,9 +270,27 @@ class Trainer(object):
         """ save """
         raise NotImplemented
 
-    def load(self, model_file, train_file):
+    def load(self, file_prefix):
         """ load """
-        raise NotImplemented
+        model_file = "{}.model".format(file_prefix)
+        train_file = "{}.train".format(file_prefix)
+
+        model_state_dict = torch.load(
+            model_file, map_location=lambda storage, loc: storage)
+        self.model.load_state_dict(model_state_dict)
+        self.logger.info("Loaded model state from '{}'".format(model_file))
+
+        train_state_dict = torch.load(
+            train_file, map_location=lambda storage, loc: storage)
+        self.epoch = train_state_dict["epoch"]
+        self.best_valid_metric = train_state_dict["best_valid_metric"]
+        self.batch_num = train_state_dict["batch_num"]
+        self.optimizer.load_state_dict(train_state_dict["optimizer"])
+        if self.lr_scheduler is not None and "lr_scheduler" in train_state_dict:
+            self.lr_scheduler.load_state_dict(train_state_dict["lr_scheduler"])
+        self.logger.info(
+            "Loaded train state from '{}' with (epoch-{} best_valid_metric-{:.3f})".format(
+                train_file, self.epoch, self.best_valid_metric))
 
     def init_message(self):
         self.train_start_message = "-" * 33 + " Model Training " + "-" * 33

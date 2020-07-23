@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2020/7/15 17:47
+# @Time    : 2020/7/15 21:20
 # @Author  : zhuo & zdy
 # @github   : iezhuozhuo
 
@@ -17,10 +17,37 @@ from gensim.models.word2vec import LineSentence
 vec_modelPath = './models/'
 vec_filePath = './'
 
-vec_size = 400
+vec_size = 128
 vec_window = 5
-vec_minCount = 5
+vec_minCount = 1
 vec_workers = 2
+
+
+class Example(object):
+    def __init__(self, text_a, text_b, label):
+        self.text_a = text_a
+        self.text_b = text_b
+        self.label = label
+
+
+class MySentences(object):
+    def __init__(self, dirname):
+        self.dirname = dirname
+
+    def __iter__(self):
+        for fname in os.listdir(self.dirname):
+            for line in open(os.path.join(self.dirname, fname)):
+                yield line.split()
+
+
+class YeildStences(object):
+    def __init__(self, dirname):
+        self.dirname = dirname
+
+    def __iter__(self):
+        for fname in os.listdir(self.dirname):
+            for line in open(os.path.join(self.dirname, fname)):
+                yield line.split()
 
 
 # 针对一个语料文件 进行训练
@@ -29,7 +56,7 @@ def vec_train_fun(modelpath, input_file, outmodel):
     inp1 = input_file
 
     outp1 = modelpath + outmodel
-    outp2 = modelpath + 'c_' + outmodel
+    outp2 = modelpath + "word2vec"
 
     # 获取日志信息
     logging.basicConfig(format='%(asctime)s:%(leveltime)s:%(message)s', level=logging.INFO)
@@ -37,12 +64,14 @@ def vec_train_fun(modelpath, input_file, outmodel):
     # ######### train
     sentences = LineSentence(inp1)
     cpuworkers = multiprocessing.cpu_count()
-
+    # for sentence in sentences:
+    #     pass
     # size表示神经网络的隐藏层单元数，默认为100
     # window表示
     # min_count小于该数的单词会被剔除，默认值为5,
     model = Word2Vec(sentences, size=vec_size, window=vec_window, min_count=vec_minCount,
-                     workers=cpuworkers)
+                     # workers=cpuworkers
+                     )
     model.save(outp1)
     model.wv.save_word2vec_format(outp2, binary=False)
 
@@ -106,7 +135,6 @@ def vec_increment_train_fun_on_basemodel(model_path, oldmodel, incr_filedata, ne
 
 
 # #######################
-
 def vec_model_test_func():
     # #导入模型
     model = Word2Vec.load("text8.model")
@@ -148,30 +176,66 @@ if __name__ == '__main__':
     #    sys.exit()
 
     # input_file = sys.argv[1]
-    # input_file = 'cut_std_zhs_wiki_00'
-    input_file = './csvdata/ali_nlp_sim.dat'
-    outmodel = 'ali.text.vec.model'
-
-    model_path = './models/'
+    input_file = '/home/administrator4/ZDY/dataset/similarity/corpus.dat'
+    # input_file = './csvdata/ali_nlp_sim.dat'
+    outmodel = 'word2vec.model'
+    outvec = 'word2vec.vec'
+    model_save_path = os.path.join('./', outmodel)
+    vec_save_path = os.path.join('./', outvec)
 
     print('start train text data')
+    sentences = LineSentence(input_file)
+    cpuworkers = multiprocessing.cpu_count()
+    model = Word2Vec(sentences, size=vec_size, window=vec_window, min_count=vec_minCount,
+                     workers=cpuworkers)
+    model.save(model_save_path)
+    model.wv.save_word2vec_format(vec_save_path, binary=False)
+
 
     # 针对一个语料文件 进行训练
-    # vec_train_fun(model_path,input_file,outmodel)
+    # vec_train_fun(model_path, input_file, outmodel)
+    #
+    # # 针对多个语料文件 进行训练
+    # # incr_corpuses = ['test_00.txt','test_01.txt']
+    # # vec_increment_train_of_no_model(model_path, incr_corpuses)
+    #
+    # # 针对有训练模型的情况 继续增量训练
+    # # incr_data2 = ["./csvdata/ali_nlp_sim.dat"]
+    # incr_data2 = ["cut_std_zhs_wiki_00", "cut_std_zhs_wiki_01", "cut_std_zhs_wiki_02",
+    #               "cut_std_zhs_wiki_03", "cut_std_zhs_wiki_04", "cut_std_zhs_wiki_05"]
+    # # oldmodel = 'word2vec_wx'
+    # # newmodel = 'word2vec_wx_ali.vec.model'
+    #
+    # oldmodel = 'word2vec_wx_ali.vec.model'
+    # newmodel = 'wiki_wx_ali.vec.model'
+    # vec_increment_train_fun_on_basemodel(model_path, oldmodel, incr_data2, newmodel)
+    #
+    # print('train end text data')
 
-    # 针对多个语料文件 进行训练
-    # incr_corpuses = ['test_00.txt','test_01.txt']
-    # vec_increment_train_of_no_model(model_path, incr_corpuses)
+    # import torch
+    # data = torch.load("./data/data.pt")
+    # data_train = data["train"]
+    # data_dev = data["valid"]
+    # f = open("./data/corpus.dat", "w", encoding="utf-8")
+    # for field, examples in data.items():
+    #     for example in examples:
+    #         text_a, text_b = example.text_a, example.text_b
+    #         f.write(text_a+"\n")
+    #         f.write(text_b+"\n")
 
-    # 针对有训练模型的情况 继续增量训练
-    # incr_data2 = ["./csvdata/ali_nlp_sim.dat"]
-    incr_data2 = ["cut_std_zhs_wiki_00", "cut_std_zhs_wiki_01", "cut_std_zhs_wiki_02",
-                  "cut_std_zhs_wiki_03", "cut_std_zhs_wiki_04", "cut_std_zhs_wiki_05"]
-    # oldmodel = 'word2vec_wx'
-    # newmodel = 'word2vec_wx_ali.vec.model'
+    import pandas as pd
+    model = gensim.models.Word2Vec.load(model_save_path)
+    vec_path = os.path.join("./", 'vec.128.csv')
 
-    oldmodel = 'word2vec_wx_ali.vec.model'
-    newmodel = 'wiki_wx_ali.vec.model'
-    vec_increment_train_fun_on_basemodel(model_path, oldmodel, incr_data2, newmodel)
+    words = model.wv.index2word
+    vec_dict = {}
+    for word in words:
+        vec_dict[word] = model.wv[word]
 
-    print('train end text data')
+    pd.DataFrame(vec_dict).to_csv(vec_path, encoding="utf_8_sig", index=False)
+
+    print()
+
+
+
+

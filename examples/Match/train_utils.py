@@ -2,6 +2,8 @@
 # @Author: zhuo & zdy
 # @github: iezhuozhuo
 # @vaws: Making Code Great Again!
+
+# encoding utf-8
 import os
 import random
 import shutil
@@ -13,23 +15,72 @@ import torch
 import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
+from torch.autograd import Variable
+
 from source.utils.engine import Trainer
+import source.utils.Constant as constants
+
+def set_seed(args):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.n_gpu > 0:
+        torch.cuda.manual_seed_all(args.seed)
 
 
-def cal_performance(preds, labels):
-    assert len(preds) == len(labels)
-    acc = (preds == labels).mean()
-    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
-    mertrics = {"acc": acc, "f1":f1}
-    return mertrics
+def checkoutput_and_setcuda(args):
+    args.output_dir = os.path.join(args.output_dir, args.model_type)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    if (
+            os.path.exists(args.output_dir)
+            and os.listdir(args.output_dir)
+            and args.do_train
+            and not args.overwrite_output_dir
+    ):
+        raise ValueError(
+            f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
+        )
+
+    # Setup CUDA, GPU & distributed training
+    if args.local_rank == -1 or args.no_cuda:
+        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
+    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", args.local_rank)
+        torch.distributed.init_process_group(backend="nccl")
+        args.n_gpu = 1
+    args.device = device
+    return args
+
+
+def init_logger(args=None):
+    logger = logging.getLogger(__name__)
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+    )
+    if args != None:
+        logger.warning(
+            "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
+            args.local_rank,
+            args.device,
+            args.n_gpu,
+            bool(args.local_rank != -1),
+            args.fp16,
+        )
+    return logger
 
 
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
-                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None, save_summary=False):
+                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, save_summary=False, processor=None):
 
         super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, num_epochs,
-                         save_dir, log_steps, valid_steps, grad_clip, lr_scheduler, model_log, save_summary)
+                         save_dir, log_steps, valid_steps, grad_clip, lr_scheduler, save_summary)
 
         self.args = args
         self.model = model
@@ -47,7 +98,7 @@ class trainer(Trainer):
         self.grad_clip = grad_clip
         self.lr_scheduler = lr_scheduler
         self.save_summary = save_summary
-        self.model_log = model_log
+        self.processor = processor
 
         if self.save_summary:
             self.train_writer = SummaryWriter(
@@ -65,14 +116,21 @@ class trainer(Trainer):
         train_start_message = "Training Epoch - {}".format(self.epoch)
         self.logger.info(train_start_message)
 
-        tr_loss, nb_tr_examples, nb_tr_steps = 0, 0, 0
+        tr_loss = 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
+            batch = tuple(t.to(self.args.device) for t in batch)
+            left_ids, right_ids, left_len, right_len, label = batch
+            input = {
+                'text_a' : left_ids,
+                'text_a_len' : left_len,
+                'text_b' : right_ids,
+                'text_b_len' : right_len
+            }
+            pred = self.model(input)
+            loss = F.cross_entropy(pred, label)
 
-            left_ids, right_ids, left_len, right_len, label = tuple(t.to(self.args.device) for t in batch)
-            inputs = {"text_a":left_ids, "text_b":right_ids, "text_a_len":left_len, "text_b_len":right_len, "label":label}
-            pred = self.model(inputs)
-            loss = F.cross_entropy(pred, inputs["label"])
+
 
             if self.args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu.
@@ -95,11 +153,10 @@ class trainer(Trainer):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
 
             tr_loss += loss.item()
-            nb_tr_steps += 1
 
             if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
                 self.optimizer.step()
-                if self.lr_scheduler:
+                if self.lr_scheduler is not None:
                     self.lr_scheduler.step()  # Update learning rate schedule
                 self.model.zero_grad()
                 self.global_step += 1
@@ -111,32 +168,31 @@ class trainer(Trainer):
 
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
-                self.model.to(self.args.device)
-                metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
+
+                if isinstance(self.model, torch.nn.DataParallel):
+                    model = self.model.module
+                else:
+                    model = self.model
+                model.to(self.args.device)
+
+                metrics = evaluate(self.args, model, self.valid_iter, self.logger)
+
                 cur_valid_metric = metrics[self.valid_metric_name]
-                self.model_log.add_metric(metric_name='test_loss', metric_value=metrics["loss"], epoch=self.epoch)
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric
                 else:
                     is_best = cur_valid_metric > self.best_valid_metric
                 if is_best:
                     self.best_valid_metric = cur_valid_metric
-                    self.model_log.add_best_result(
-                        best_name="best_"+self.valid_metric_name, best_value=cur_valid_metric, best_epoch=self.epoch)
                 self.save(is_best)
-                self.model_log.add_metric(metric_name="test_F1", metric_value=metrics["f1"], epoch=self.epoch)
-                self.model_log.add_metric(metric_name="test_acc", metric_value=metrics["acc"], epoch=self.epoch)
-
                 self.logger.info("-" * 85 + "\n")
-        loss_epoch = tr_loss / nb_tr_steps
-        self.model_log.add_metric(metric_name='train_loss', metric_value=loss_epoch, epoch=self.epoch)
-        # self.model_log.add_metric(
-        #     metric_name="lr", metric_value=self.optimizer.state_dict()['param_groups'][0]['lr'], epoch=self.epoch)
+
 
     def train(self):
         if self.args.max_steps > 0:
             t_total = self.args.max_steps
-            self.args.num_train_epochs = self.args.max_steps // (len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
+            self.args.num_train_epochs = self.args.max_steps // (
+                        len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
         else:
             t_total = len(self.train_iter) // self.args.gradient_accumulation_steps * self.args.num_train_epochs
 
@@ -155,6 +211,7 @@ class trainer(Trainer):
         self.logger.info("logger steps = %d", self.log_steps)
         self.logger.info("valid steps = %d", self.valid_steps)
         self.logger.info("-" * 85 + "\n")
+
         if self.args.fp16:
             try:
                 from apex import amp
@@ -169,11 +226,14 @@ class trainer(Trainer):
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
             self.model = torch.nn.parallel.DistributedDataParallel(
-                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank, find_unused_parameters=True,
+                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank,
+                find_unused_parameters=True,
             )
 
         for _ in range(int(self.num_epochs)):
             self.train_epoch()
+        # FIXME 保存model
+        self.save()
 
     def save(self, is_best=False, save_mode="best"):
         model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
@@ -215,7 +275,8 @@ class trainer(Trainer):
         self.epoch = train_state_dict["epoch"]
         self.best_valid_metric = train_state_dict["best_valid_metric"]
         self.batch_num = train_state_dict["batch_num"]
-        self.optimizer.load_state_dict(train_state_dict["optimizer"])
+        if self.optimizer is not None and "optimizer" in train_state_dict:
+            self.optimizer.load_state_dict(train_state_dict["optimizer"])
         if self.lr_scheduler is not None and "lr_scheduler" in train_state_dict:
             self.lr_scheduler.load_state_dict(train_state_dict["lr_scheduler"])
         self.logger.info(
@@ -223,17 +284,32 @@ class trainer(Trainer):
                 train_file, self.epoch, self.best_valid_metric))
 
 
+
+
+def cal_performance(preds, labels):
+    assert len(preds) == len(labels)
+    acc = (preds == labels).mean()
+    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
+    mertrics = {"acc": acc, "f1":f1}
+    return mertrics
+
+
 def evaluate(args, model, valid_dataset, logger):
     eval_loss, nb_eval_steps = 0.0, 0
     labels, preds = None, None
     model.eval()
     for batch in valid_dataset:
-        left_ids, right_ids, left_len, right_len, label = tuple(t.to(args.device) for t in batch)
-        inputs = {"text_a": left_ids, "text_b": right_ids, "text_a_len": left_len, "text_b_len": right_len,
-                  "label": label}
+        batch = tuple(t.to(args.device) for t in batch)
+        left_ids, right_ids, left_len, right_len, label = batch
+        input = {
+            'text_a': left_ids,
+            'text_a_len': left_len,
+            'text_b': right_ids,
+            'text_b_len': right_len
+        }
         with torch.no_grad():
-            logits = model(inputs)
-            tmp_eval_loss = F.cross_entropy(logits, inputs["label"])
+            logits = model(input)
+            tmp_eval_loss = F.cross_entropy(logits, label)
             if args.n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
 
@@ -242,10 +318,10 @@ def evaluate(args, model, valid_dataset, logger):
 
         if preds is None:
             preds = logits.detach().cpu().numpy()
-            labels = inputs["label"].detach().cpu().numpy()
+            labels = label.detach().cpu().numpy()
         else:
             preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-            labels = np.append(labels, inputs["label"].detach().cpu().numpy(), axis=0)
+            labels = np.append(labels, label.detach().cpu().numpy(), axis=0)
 
     eval_loss = eval_loss / nb_eval_steps
     preds = np.argmax(preds, axis=1)
@@ -255,3 +331,8 @@ def evaluate(args, model, valid_dataset, logger):
     for key in sorted(metrics.keys()):
         logger.info("  %s = %s", key.upper(), str(metrics[key]))
     return metrics
+
+
+
+
+
