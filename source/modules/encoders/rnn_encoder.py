@@ -11,6 +11,7 @@ File: source/encoders/rnn_encoder.py
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import pad_packed_sequence
@@ -395,3 +396,75 @@ class HRNNEncoder(nn.Module):
             return hiera_outputs, hiera_hidden, (last_sub_outputs, last_sub_lengths)
         else:
             return hiera_outputs, hiera_hidden, None
+
+
+class StackedBRNN(nn.Module):
+    """
+    Stacked Bi-directional RNNs.
+    Differs from standard PyTorch library in that it has the option to save
+    and concat the hidden states between layers. (i.e. the output hidden size
+    for each sequence input is num_layers * hidden_size).
+
+    """
+    # TODO add weight or attention for all layer hidden
+    def __init__(self,
+                 input_size, hidden_size, num_layers,
+                 dropout_rate=0, dropout_output=False, rnn_type=nn.LSTM,
+                 concat_layers=False):
+        """Stacked Bidirectional LSTM."""
+        super().__init__()
+        self.dropout_output = dropout_output
+        self.dropout_rate = dropout_rate
+        self.num_layers = num_layers
+        self.concat_layers = concat_layers
+        self.rnns = nn.ModuleList()
+        for i in range(num_layers):
+            input_size = input_size if i == 0 else 2 * hidden_size
+            self.rnns.append(rnn_type(input_size, hidden_size,
+                                      num_layers=1,
+                                      bidirectional=True))
+
+    def forward(self, x):
+        """Encode either padded or non-padded sequences."""
+        # if not x_mask:
+        #     # No padding necessary.
+        #     output = self._forward_unpadded(x, x_mask)
+        output = self._forward_unpadded(x)
+
+        return output.contiguous()
+
+    def _forward_unpadded(self, x):
+        """Faster encoding that ignores any padding."""
+        # Transpose batch and sequence dims
+        x = x.transpose(0, 1)
+
+        # Encode all layers
+        outputs = [x]
+        for i in range(self.num_layers):
+            rnn_input = outputs[-1]
+
+            # Apply dropout to hidden input
+            if self.dropout_rate > 0:
+                rnn_input = F.dropout(rnn_input,
+                                      p=self.dropout_rate,
+                                      training=self.training)
+            # Forward
+            self.rnns[i].flatten_parameters()
+            rnn_output = self.rnns[i](rnn_input)[0]
+            outputs.append(rnn_output)
+
+        # Concat hidden layers
+        if self.concat_layers:
+            output = torch.cat(outputs[1:], 2)
+        else:
+            output = outputs[-1]
+
+        # Transpose back
+        output = output.transpose(0, 1)
+
+        # Dropout on output layer
+        if self.dropout_output and self.dropout_rate > 0:
+            output = F.dropout(output,
+                               p=self.dropout_rate,
+                               training=self.training)
+        return output

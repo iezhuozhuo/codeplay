@@ -10,7 +10,8 @@ from source.modules.activate import parse_activation
 from source.modules.linears import quickly_output_layer, quickly_multi_layer_perceptron_layer
 from source.modules.matching import Matching, mp_matching_func, mp_matching_func_pairwise, mp_matching_attention, \
     div_with_small_value
-from source.modules.encoders.rnn_encoder import LSTMEncoder, GRUEncoder
+from source.modules.encoders.rnn_encoder import LSTMEncoder, GRUEncoder, StackedBRNN
+from source.modules.attention import BidirectionalAttention
 
 
 class ArcI(nn.Module):
@@ -546,6 +547,18 @@ class MatchPyramid(nn.Module):
 class MatchSRNN(nn.Module):
     def __int__(self):
         super(MatchSRNN, self).__int__()
+        """
+        paper link: https://arxiv.org/pdf/1604.04378.pdf
+        """
+
+
+# TODO MIX
+class MIX(nn.Module):
+    def __init__(self):
+        super(MIX, self).__init__()
+    """
+    参考： https://github.com/hanzhenlei767/NLP_Learn/tree/4a780c08788e7b4184c7bf42c3db1423532637ba/%E6%96%87%E6%9C%AC%E5%8C%B9%E9%85%8D
+    """
 
 
 # MwAN
@@ -560,8 +573,9 @@ class MwAN(nn.Module):
                  ):
         super().__init__()
         """
-        v1版本，没有忠于原文，仅实现了四种注意力机制。
-        原文4.4部分/4.5部分 门控控制输入没有完成。
+        paper link: https://www.ijcai.org/Proceedings/2018/0613.pdf
+        v1版本使用 https://github.com/syw1996/Retrieval-Automatic-Comment-System/blob/master/model.py 注意力计算方式
+        v2版本优化参考 https://github.com/bulong/MANM/blob/master/MANM.py 补充了 inter_agg 和 mix_agg
         """
         self.args = args
         if embedd is None:
@@ -923,3 +937,199 @@ class bimpm(nn.Module):
         x = self.pred_fc2(x)
 
         return x
+    
+
+# ESIM
+class ESIM(nn.Module):
+    def __init__(self,
+                 args,
+                 embedd=None,
+                 num_layer=1,
+                 rnn_type="lstm",
+                 drop_rnn=False,
+                 drop_rate=0.2,
+                 concat_rnn=True,
+                 padding_idx=0
+                 ):
+        super(ESIM, self).__init__()
+
+        self.args = args
+        if embedd is None:
+            raise Exception("The embdding layer is None")
+        self.embedding = embedd
+        self.embedding_dim = embedd.embedding_dim
+        self.hidden_size = args.hidden_size
+        self.num_layer = num_layer
+        self.rnn_type = rnn_type
+        self.drop_rnn = drop_rnn
+        self.drop_rate = drop_rate
+        self.concat_rnn = concat_rnn
+        self.padding_idx = padding_idx
+
+        self.build()
+
+    def build(self):
+        rnn_mapping = {'lstm': nn.LSTM, 'gru': nn.GRU}
+        rnn_size = self.hidden_size
+        if self.concat_rnn:
+            rnn_size /= self.num_layer
+
+        self.rnn_encoder = StackedBRNN(
+            input_size=self.embedding_dim,
+            hidden_size=int(rnn_size/2),
+            num_layers=self.num_layer,
+            dropout_rate=self.drop_rate ,
+            dropout_output=self.drop_rnn,
+            rnn_type=rnn_mapping[self.rnn_type],
+            concat_layers=self.concat_rnn
+        )
+
+        self.attention = BidirectionalAttention()
+
+        self.projection = nn.Sequential(
+            nn.Linear(
+                4 * self.hidden_size,
+                self.hidden_size),
+            parse_activation("relu"))
+
+        self.composition = StackedBRNN(
+            self.hidden_size,
+            int(rnn_size / 2),
+            self.num_layer,
+            dropout_rate=self.drop_rate,
+            dropout_output=self.drop_rnn,
+            rnn_type=rnn_mapping[self.rnn_type],
+            concat_layers=self.concat_rnn)
+
+        self.classification = nn.Sequential(
+            nn.Dropout(
+                p=self.drop_rate),
+            nn.Linear(
+                4 * self.hidden_size,
+                self.hidden_size),
+            nn.Tanh(),
+            nn.Dropout(
+                p=self.drop_rate)
+        )
+        self.out = quickly_output_layer(
+            task="classify",
+            num_classes=2,
+            in_features=self.hidden_size)
+
+    def forward(self, inputs):
+        """Forward."""
+
+        # [B, L], [B, R]
+        query, doc = inputs['text_a'], inputs['text_b']
+
+        # [B, L]
+        # [B, R]
+        query_mask = (query == self.padding_idx)
+        doc_mask = (doc == self.padding_idx)
+
+        # [B, L, D]
+        # [B, R, D]
+        query = self.embedding(query)
+        doc = self.embedding(doc)
+
+        # [B, L, D]
+        # [B, R, D]
+        # query = self.rnn_dropout(query)
+        # doc = self.rnn_dropout(doc)
+
+        # [B, L, H]
+        # [B, R, H]
+        # query = self.rnn_encoder(query, query_mask)
+        # doc = self.rnn_encoder(doc, doc_mask)
+        query = self.rnn_encoder(query)
+        doc = self.rnn_encoder(doc)
+
+        # [B, L, H], [B, L, H]
+        attended_query, attended_doc = self.attention(
+            query, query_mask, doc, doc_mask)
+
+        # [B, L, 4 * H]
+        # [B, L, 4 * H]
+        # Enhancement of local inference information
+        enhanced_query = torch.cat([query,
+                                    attended_query,
+                                    query - attended_query,
+                                    query * attended_query],
+                                   dim=-1)
+        enhanced_doc = torch.cat([doc,
+                                  attended_doc,
+                                  doc - attended_doc,
+                                  doc * attended_doc],
+                                 dim=-1)
+        # [B, L, H]
+        # [B, L, H]
+        projected_query = self.projection(enhanced_query)
+        projected_doc = self.projection(enhanced_doc)
+
+        # [B, L, H]
+        # [B, L, H]
+        # query = self.composition(projected_query, query_mask)
+        # doc = self.composition(projected_doc, doc_mask)
+        query = self.composition(projected_query)
+        doc = self.composition(projected_doc)
+
+        # [B, L]
+        # [B, R]
+        reverse_query_mask = 1. - query_mask.float()
+        reverse_doc_mask = 1. - doc_mask.float()
+
+        # [B, H] pooling
+        query_avg = torch.sum(query * reverse_query_mask.unsqueeze(2), dim=1) \
+                    / (torch.sum(reverse_query_mask, dim=1, keepdim=True) + 1e-8)
+        doc_avg = torch.sum(doc * reverse_doc_mask.unsqueeze(2), dim=1) \
+                  / (torch.sum(reverse_doc_mask, dim=1, keepdim=True) + 1e-8)
+
+        # [B, L, H]
+        # [B, L, H]
+        query = query.masked_fill(query_mask.unsqueeze(2), -1e7)
+        doc = doc.masked_fill(doc_mask.unsqueeze(2), -1e7)
+
+        # [B, H]
+        # [B, H]
+        query_max, _ = query.max(dim=1)
+        doc_max, _ = doc.max(dim=1)
+
+        # [B, 4 * H]
+        v = torch.cat([query_avg, query_max, doc_avg, doc_max], dim=-1)
+
+        # [B, H]
+        hidden = self.classification(v)
+
+        # [B, num_classes]
+        out = self.out(hidden)
+
+        return out
+
+
+# DIIN
+class DIIN(nn.Module):
+    def __init__(self,
+                 args,
+                 embedd,
+                 dropout_rate=0.2):
+        super(DIIN, self).__init__()
+
+        """
+        Deep Interactive Inference Network (IIN) consists of five component:
+        embedding layer, encoding layer, interaction layer, feature extraction layer, and output layer.
+        """
+        self.args = args
+
+        if embedd is None:
+            raise Exception("The embdding layer is None")
+        self.embedding = embedd
+        self.embedding_dim = embedd.embedding_dim
+        self.padding_idx = args.padding_idx
+        self.char_embedding_input_dim = args.char_embedding_input_dim
+        self.char_embedding_output_dim = args.char_embedding_output_dim
+        self.char_conv_filters = args.char_conv_filters
+        self.char_conv_kernel_size = args.char_conv_kernel_size
+        self.conv_kernel_size = args.conv_kernel_size
+        self.pool_kernel_size = args.pool_kernel_size
+
+        self.dropout_rate = dropout_rate

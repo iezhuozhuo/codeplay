@@ -17,7 +17,8 @@ from ModelConfig import (
     MVLSTMConfig, MVLSTMoel,
     MatchPyramidConig, MatchPyramidModel,
     MwANConfig, MwANModel,
-    BiMPMConfig, BiMPMModule
+    BiMPMConfig, BiMPMModule,
+    ESIMConfig, ESIMModel
 )
 from preprocessing import MatchCorpus
 from preprocessing import Example, InputFeatures
@@ -36,7 +37,8 @@ MODEL_CLASSES = {
     "mvlstm": (MVLSTMConfig, MVLSTMoel),
     "matchpyramid": (MatchPyramidConig, MatchPyramidModel),
     "mwan": (MwANConfig, MwANModel),
-    "bimpm": (BiMPMConfig, BiMPMModule)
+    "bimpm": (BiMPMConfig, BiMPMModule),
+    "esim": (ESIMConfig, ESIMModel)
 }
 
 
@@ -54,20 +56,22 @@ def main():
 
     model_log = ModelLog(nick_name='zhuo', project_name='DeepMatch', project_remark='')
     model_log.add_model_name(model_name=args.model_type.upper())
-    model_log.add_model_remark(remark='不使用aug')
-    model_log.add_param(param_dict=vars(args), param_type='py_param')
+    if args.aug:
+        model_log.add_model_remark(remark='使用aug')
+    else:
+        model_log.add_model_remark(remark='不使用aug')
 
     specials = [constants.PAD_WORD, constants.UNK_WORD]
     processor = MatchCorpus(args, specials=specials)
     padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
-
+    args.padding_idx = padding_idx
     embedded_pretrain = Embedder(num_embeddings=processor.field["text"].vocab_size,
                                  embedding_dim=128, padding_idx=padding_idx)
     embedded_pretrain.load_embeddingsfor_gensim_vec("/home/gong/zz/data/Match/word2vec.model",
                                                     processor.field["text"].stoi)
 
     logger.info(args)
-
+    model_log.add_param(param_dict=vars(args), param_type='py_param')
     model = model_class(args, embedd=embedded_pretrain)
     model.to(args.device)
 

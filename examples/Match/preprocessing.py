@@ -235,11 +235,16 @@ class MatchCorpus(object):
             if len(text_b_words) > self.args.max_seq_length:
                 text_b_words = text_b_words[:self.args.max_seq_length]
             right_len = len(text_b_words)
-
-            left_ids, right_ids = [], []
+            left_ids, right_ids, left_char_ids, right_char_ids = [], [], [], []
             for i, word in enumerate(text_a_words):
                 left_ids.append(
                     self.field["text"].stoi.get(word, self.field["text"].stoi.get(constants.UNK_WORD)))
+                left_char_id = []
+                for char in word:
+                    left_char_id.append(
+                        self.field["text_char"].stoi.get(char, self.field["text_char"].stoi.get(constants.UNK_WORD)))
+                left_char_ids.append(left_char_id)
+
             for i, word in enumerate(text_b_words):
                 right_ids.append(
                     self.field["text"].stoi.get(word, self.field["text"].stoi.get(constants.UNK_WORD)))
@@ -314,7 +319,7 @@ if __name__ == "__main__":
     specials = [constants.UNK_WORD, constants.PAD_WORD]
     processor = MatchCorpus(args=args, specials=specials)
     print(processor.field["text"].vocab_size)
-    # s = "蚂蚁花呗今天要还了，好凄惨啊!!!233333~~~"
+    # s = "蚂蚁花呗 今天 要还  好 凄惨 啊"
     # print(processor.tokenizer(s))
     from source.modules.embedder import Embedder
 

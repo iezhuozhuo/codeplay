@@ -3,7 +3,7 @@
 # @github: iezhuozhuo
 # @vaws: Making Code Great Again!
 
-from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN, bimpm
+from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN, bimpm,ESIM
 
 
 def ARCIConfig(parser):
@@ -121,3 +121,25 @@ def BiMPMConfig(parser):
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()
     return args
+
+
+def ESIMModel(args, embedd):
+    model = ESIM(
+        args=args,
+        embedd=embedd,
+        num_layer=4,
+        rnn_type="lstm",
+        drop_rnn=True,
+        drop_rate=0.2,
+        concat_rnn=True,
+        padding_idx=args.padding_idx
+    )
+    return model
+
+
+def ESIMConfig(parser):
+    parser.add_argument("--hidden_size", default=128, type=int)
+    parser.add_argument("--aug", action="store_true")
+    args, _ = parser.parse_known_args()
+    return args
+
