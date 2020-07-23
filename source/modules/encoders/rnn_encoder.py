@@ -1,5 +1,17 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+################################################################################
+#
+# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
+#
+################################################################################
+"""
+File: source/encoders/rnn_encoder.py
+"""
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.nn.utils.rnn import pad_packed_sequence
@@ -48,7 +60,7 @@ class LSTMEncoder(nn.Module):
 
         if self.output_type == "seq2seq":
             self.W_h = nn.Linear(
-                self.hidden_size * self.num_directions, self.hidden_size * self.num_directions, bias=False
+                self.rnn_hidden_size * self.num_directions, self.rnn_hidden_size * self.num_directions, bias=False
             )
 
     def forward(self, inputs, hidden=None):
@@ -95,16 +107,17 @@ class LSTMEncoder(nn.Module):
 
             if num_valid < batch_size:
                 zeros = outputs.new_zeros(
-                    batch_size - num_valid, outputs.size(1), outputs.size(2))
+                    batch_size - num_valid, outputs.size(1), self.rnn_hidden_size * self.num_directions)
                 outputs = torch.cat([outputs, zeros], dim=0)
 
-                zeros = last_hidden[0].new_zeros(
-                    self.num_layers, batch_size - num_valid, last_hidden[0].size(2))
-                zeros = last_hidden[1].new_zeros(
-                    self.num_layers, batch_size - num_valid, last_hidden[1].size(2))
-                h_tmp = torch.cat([last_hidden[0], zeros], dim=1)
-                c_tmp = torch.cat([last_hidden[1], zeros], dim=1)
-                last_hidden = (h_tmp, c_tmp)
+                zeros_h = last_hidden[0].new_zeros(
+                    self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
+                h = torch.cat([last_hidden[0], zeros_h], dim=1)
+                zeros_c = last_hidden[1].new_zeros(
+                    self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
+                c = torch.cat([last_hidden[1], zeros_c], dim=1)
+                last_hidden = (h, c)
+
             h, c = last_hidden
             _, inv_indices = indices.sort()
             outputs = outputs.index_select(0, inv_indices)
@@ -112,7 +125,7 @@ class LSTMEncoder(nn.Module):
             c = c.index_select(1, inv_indices)
 
         if self.output_type == "seq2seq":
-            encoder_feature = outputs.view(-1, self.num_directions * self.hidden_size)
+            encoder_feature = outputs.view(-1, self.num_directions * self.rnn_hidden_size)
             encoder_feature = self.W_h(encoder_feature)
             return outputs, encoder_feature, (h, c)
 
@@ -145,14 +158,18 @@ class GRUEncoder(nn.Module):
                  input_size,
                  hidden_size,
                  embedder=None,
+                 rnn_hidden_size=None,
                  num_layers=1,
                  bidirectional=True,
                  dropout=0.0):
         super(GRUEncoder, self).__init__()
 
-        num_directions = 2 if bidirectional else 1
-        assert hidden_size % num_directions == 0
-        rnn_hidden_size = hidden_size // num_directions
+        self.num_directions = 2 if bidirectional else 1
+        if not rnn_hidden_size:
+            assert hidden_size % self.num_directions == 0
+        else:
+            assert rnn_hidden_size == hidden_size
+        self.rnn_hidden_size = rnn_hidden_size or hidden_size // 2
 
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -206,11 +223,11 @@ class GRUEncoder(nn.Module):
 
             if num_valid < batch_size:
                 zeros = outputs.new_zeros(
-                    batch_size - num_valid, outputs.size(1), self.hidden_size)
+                    batch_size - num_valid, outputs.size(1), self.rnn_hidden_size * self.num_directions)
                 outputs = torch.cat([outputs, zeros], dim=0)
 
                 zeros = last_hidden.new_zeros(
-                    self.num_layers, batch_size - num_valid, self.hidden_size)
+                    self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
                 last_hidden = torch.cat([last_hidden, zeros], dim=1)
 
             _, inv_indices = indices.sort()
@@ -379,3 +396,75 @@ class HRNNEncoder(nn.Module):
             return hiera_outputs, hiera_hidden, (last_sub_outputs, last_sub_lengths)
         else:
             return hiera_outputs, hiera_hidden, None
+
+
+class StackedBRNN(nn.Module):
+    """
+    Stacked Bi-directional RNNs.
+    Differs from standard PyTorch library in that it has the option to save
+    and concat the hidden states between layers. (i.e. the output hidden size
+    for each sequence input is num_layers * hidden_size).
+
+    """
+    # TODO add weight or attention for all layer hidden
+    def __init__(self,
+                 input_size, hidden_size, num_layers,
+                 dropout_rate=0, dropout_output=False, rnn_type=nn.LSTM,
+                 concat_layers=False):
+        """Stacked Bidirectional LSTM."""
+        super().__init__()
+        self.dropout_output = dropout_output
+        self.dropout_rate = dropout_rate
+        self.num_layers = num_layers
+        self.concat_layers = concat_layers
+        self.rnns = nn.ModuleList()
+        for i in range(num_layers):
+            input_size = input_size if i == 0 else 2 * hidden_size
+            self.rnns.append(rnn_type(input_size, hidden_size,
+                                      num_layers=1,
+                                      bidirectional=True))
+
+    def forward(self, x):
+        """Encode either padded or non-padded sequences."""
+        # if not x_mask:
+        #     # No padding necessary.
+        #     output = self._forward_unpadded(x, x_mask)
+        output = self._forward_unpadded(x)
+
+        return output.contiguous()
+
+    def _forward_unpadded(self, x):
+        """Faster encoding that ignores any padding."""
+        # Transpose batch and sequence dims
+        x = x.transpose(0, 1)
+
+        # Encode all layers
+        outputs = [x]
+        for i in range(self.num_layers):
+            rnn_input = outputs[-1]
+
+            # Apply dropout to hidden input
+            if self.dropout_rate > 0:
+                rnn_input = F.dropout(rnn_input,
+                                      p=self.dropout_rate,
+                                      training=self.training)
+            # Forward
+            self.rnns[i].flatten_parameters()
+            rnn_output = self.rnns[i](rnn_input)[0]
+            outputs.append(rnn_output)
+
+        # Concat hidden layers
+        if self.concat_layers:
+            output = torch.cat(outputs[1:], 2)
+        else:
+            output = outputs[-1]
+
+        # Transpose back
+        output = output.transpose(0, 1)
+
+        # Dropout on output layer
+        if self.dropout_output and self.dropout_rate > 0:
+            output = F.dropout(output,
+                               p=self.dropout_rate,
+                               training=self.training)
+        return output

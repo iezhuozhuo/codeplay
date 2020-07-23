@@ -20,11 +20,11 @@ import source.utils.Constant as constants
 from source.inputters.field import TextField, NumberField
 
 logger = init_logger()
-user_dict_name = "/home/administrator4/ZDY/dataset/similarity/dict_all.txt"
+user_dict_name = "/home/gong/zz/data/Match/dict_all.txt"
 logger.info("loading {} user_dict".format(user_dict_name))
 jieba.load_userdict(user_dict_name)
 
-stopwords_file = "/home/administrator4/ZDY/dataset/similarity/stop_words.txt"
+stopwords_file = "/home/gong/zz/data/Match/stop_words.txt"
 logger.info("loading {} stop word".format(stopwords_file))
 stopwords = {line.strip(): 0 for line in open(stopwords_file, 'r', encoding="utf-8").readlines()}
 
@@ -235,11 +235,16 @@ class MatchCorpus(object):
             if len(text_b_words) > self.args.max_seq_length:
                 text_b_words = text_b_words[:self.args.max_seq_length]
             right_len = len(text_b_words)
-
-            left_ids, right_ids = [], []
+            left_ids, right_ids, left_char_ids, right_char_ids = [], [], [], []
             for i, word in enumerate(text_a_words):
                 left_ids.append(
                     self.field["text"].stoi.get(word, self.field["text"].stoi.get(constants.UNK_WORD)))
+                left_char_id = []
+                for char in word:
+                    left_char_id.append(
+                        self.field["text_char"].stoi.get(char, self.field["text_char"].stoi.get(constants.UNK_WORD)))
+                left_char_ids.append(left_char_id)
+
             for i, word in enumerate(text_b_words):
                 right_ids.append(
                     self.field["text"].stoi.get(word, self.field["text"].stoi.get(constants.UNK_WORD)))
@@ -271,56 +276,56 @@ class MatchCorpus(object):
         return seq
 
 
-# if __name__ == "__main__":
-#     import argparse
-#     # from source.utils.misc import checkoutput_and_setcuda
-#
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument(
-#         "--model_type",
-#         default="",
-#         type=str,
-#     )
-#     parser.add_argument(
-#         "--data_dir",
-#         default="",
-#         type=str,
-#     )
-#     parser.add_argument(
-#         "--train_file",
-#         default="train.csv",
-#         type=str,
-#     )
-#     parser.add_argument(
-#         "--dev_file",
-#         default="dev.csv",
-#         type=str,
-#     )
-#     parser.add_argument(
-#         "--output_dir",
-#         default="",
-#         type=str,
-#     )
-#     parser.add_argument(
-#         "--max_seq_length",
-#         default=32,
-#         type=int,
-#     )
-#     parser.add_argument("--aug", action="store_true")
-#
-#     args, _ = parser.parse_known_args()
-#     args.local_rank = -1
-#     # args = checkoutput_and_setcuda(args)
-#     specials = [constants.UNK_WORD, constants.PAD_WORD]
-#     processor = MatchCorpus(args=args, specials=specials)
-#     print(processor.field["text"].vocab_size)
-#     # s = "蚂蚁花呗今天要还了，好凄惨啊!!!233333~~~"
-#     # print(processor.tokenizer(s))
-#     from source.modules.embedder import Embedder
-#
-#     padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
-#     embedding = Embedder(num_embeddings=processor.field["text"].vocab_size,
-#                          embedding_dim=128, padding_idx=padding_idx)
-#     embedding.load_embeddingsfor_gensim_vec("/home/gong/zz/data/Match/word2vec.model", processor.field["text"].stoi)
-#     args.train_batch_size = 64
-#     dataloader = processor.create_batch("train")
+if __name__ == "__main__":
+    import argparse
+    # from source.utils.misc import checkoutput_and_setcuda
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_type",
+        default="",
+        type=str,
+    )
+    parser.add_argument(
+        "--data_dir",
+        default="",
+        type=str,
+    )
+    parser.add_argument(
+        "--train_file",
+        default="train.csv",
+        type=str,
+    )
+    parser.add_argument(
+        "--dev_file",
+        default="dev.csv",
+        type=str,
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="",
+        type=str,
+    )
+    parser.add_argument(
+        "--max_seq_length",
+        default=32,
+        type=int,
+    )
+    parser.add_argument("--aug", action="store_true")
+
+    args, _ = parser.parse_known_args()
+    args.local_rank = -1
+    # args = checkoutput_and_setcuda(args)
+    specials = [constants.UNK_WORD, constants.PAD_WORD]
+    processor = MatchCorpus(args=args, specials=specials)
+    print(processor.field["text"].vocab_size)
+    # s = "蚂蚁花呗 今天 要还  好 凄惨 啊"
+    # print(processor.tokenizer(s))
+    from source.modules.embedder import Embedder
+
+    padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
+    embedding = Embedder(num_embeddings=processor.field["text"].vocab_size,
+                         embedding_dim=128, padding_idx=padding_idx)
+    embedding.load_embeddingsfor_gensim_vec("/home/gong/zz/data/Match/word2vec.model", processor.field["text"].stoi)
+    args.train_batch_size = 64
+    dataloader = processor.create_batch("train")

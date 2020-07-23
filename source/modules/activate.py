@@ -78,7 +78,7 @@ def parse_activation(
     :return: A :class:`nn.Module` instance
     Examples::
         >>> from torch import nn
-        >>> from source.callback.activate import parse_activation
+        >>> from source.modules.activate import parse_activation
     Use `str` as activation:
         >>> activation = parse_activation('relu')
         >>> type(activation)
