@@ -1,18 +1,8 @@
-## 关于train_utils.py代码的模板，按需修改使用
+# -*- coding: utf-8 -*-
+# @Author: zhuo & zdy
+# @github: iezhuozhuo
+# @vaws: Making Code Great Again!
 
-**可以直接使用有：**
-
-set_seed，checkoutput_and_setcuda，init_logger
-
-**定制的有：**
-
-trainer，evaluation，cal_performance，infer，ModelConfig以及其他应该需要的
-
-### Directly Use
-
-set_seed, checkoutput_and_setcuda, init_logger
-
-```python
 import os
 import random
 import shutil
@@ -26,80 +16,22 @@ from tensorboardX import SummaryWriter
 
 from source.utils.engine import Trainer
 
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
+
+# FIXME 定制就算metric的函数
+def cal_performance(preds, labels):
+    assert len(preds) == len(labels)
+    acc = (preds == labels).mean()
+    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
+    mertrics = {"acc": acc, "f1":f1}
+    return mertrics
 
 
-def checkoutput_and_setcuda(args):
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    if (
-        os.path.exists(args.output_dir)
-        and os.listdir(args.output_dir)
-        and args.do_train
-        and not args.overwrite_output_dir
-    ):
-        raise ValueError(
-            f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
-        )
-
-    # Setup CUDA, GPU & distributed training
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
-    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
-        args.n_gpu = 1
-    args.device = device
-    return args
-
-
-def init_logger(args):
-    logger = logging.getLogger(__name__)
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
-    )
-    logger.warning(
-        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
-        args.local_rank,
-        args.device,
-        args.n_gpu,
-        bool(args.local_rank != -1),
-        args.fp16,
-    )
-    return logger
-
-```
-
-### Costomize
-
-#### trainer
-
-定制的部分在于换一下数据读入的方式、loss的计算方式、save strategy以及load strategy。
-
-**TODO**：
-
-- optimizer学习率衰减策略`lr_scheduler`
-- Early stop
-- `save_summary`可视化
-- model`load`函数
-
-```python
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
-                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, save_summary=False):
+                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None, save_summary=False):
 
-        super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, num_epochs,
-                         save_dir, log_steps, valid_steps, grad_clip, lr_scheduler, save_summary)
+        super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, save_dir,
+                         num_epochs, log_steps, valid_steps, grad_clip, lr_scheduler, model_log, save_summary)
 
         self.args = args
         self.model = model
@@ -117,6 +49,7 @@ class trainer(Trainer):
         self.grad_clip = grad_clip
         self.lr_scheduler = lr_scheduler
         self.save_summary = save_summary
+        self.model_log = model_log
 
         if self.save_summary:
             self.train_writer = SummaryWriter(
@@ -137,11 +70,18 @@ class trainer(Trainer):
         tr_loss, nb_tr_examples, nb_tr_steps = 0, 0, 0
         for batch_id, batch in enumerate(self.train_iter, 1):
             self.model.train()
-			
-			# 定义自己的输入格式
-            inputs_id, inputs_label, _ = tuple(t.to(self.args.device) for t in batch)
-            pred = self.model(inputs_id)
-            loss = F.cross_entropy(pred, inputs_label)
+
+            # FIXME 该处定制自己的输入
+            inputs = tuple(t.to(self.args.device) for t in batch)
+            # left_ids, right_ids, left_len, right_len, \
+            # left_char_id, right_char_id, left_char_len, right_char_len, label = tuple(t.to(self.args.device) for t in batch)
+            # inputs = {"text_a": left_ids, "text_b": right_ids,
+            #           "text_a_len": left_len, "text_b_len": right_len,
+            #           "text_a_char": left_char_id, "text_b_char": right_char_id,
+            #           "text_a_char_len": left_char_len, "text_b_char_len": right_char_len,
+            #           "label": label}
+            pred = self.model(inputs)
+            loss = F.cross_entropy(pred, inputs["label"])
 
             if self.args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu.
@@ -164,7 +104,6 @@ class trainer(Trainer):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
 
             tr_loss += loss.item()
-            nb_tr_examples += inputs_id.size(0)
             nb_tr_steps += 1
 
             if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
@@ -178,22 +117,30 @@ class trainer(Trainer):
                 # logging_loss = tr_loss / self.global_step
                 self.logger.info("the current train_steps is {}".format(self.global_step))
                 self.logger.info("the current logging_loss is {}".format(loss.item()))
-			
-            ## TODO：提前终止后续安排
+
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
                 self.model.to(self.args.device)
                 metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
                 cur_valid_metric = metrics[self.valid_metric_name]
+                self.model_log.add_metric(metric_name='test_loss', metric_value=metrics["loss"], epoch=self.epoch)
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric
                 else:
                     is_best = cur_valid_metric > self.best_valid_metric
                 if is_best:
                     self.best_valid_metric = cur_valid_metric
+                    self.model_log.add_best_result(
+                        best_name="best_"+self.valid_metric_name, best_value=cur_valid_metric, best_epoch=self.epoch)
                 self.save(is_best)
-                self.logger.info("-" * 85 + "\n")
+                self.model_log.add_metric(metric_name="test_F1", metric_value=metrics["f1"], epoch=self.epoch)
+                self.model_log.add_metric(metric_name="test_acc", metric_value=metrics["acc"], epoch=self.epoch)
 
+                self.logger.info("-" * 85 + "\n")
+        loss_epoch = tr_loss / nb_tr_steps
+        self.model_log.add_metric(metric_name='train_loss', metric_value=loss_epoch, epoch=self.epoch)
+        # self.model_log.add_metric(
+        #     metric_name="lr", metric_value=self.optimizer.state_dict()['param_groups'][0]['lr'], epoch=self.epoch)
 
     def train(self):
         if self.args.max_steps > 0:
@@ -267,9 +214,6 @@ class trainer(Trainer):
                     best_model_file, self.valid_metric_name.upper(), self.best_valid_metric))
 
     def load(self, model_file, train_file):
-        """
-        load
-        """
         model_state_dict = torch.load(
             model_file, map_location=lambda storage, loc: storage)
         self.model.load_state_dict(model_state_dict)
@@ -286,42 +230,39 @@ class trainer(Trainer):
         self.logger.info(
             "Loaded train state from '{}' with (epoch-{} best_valid_metric-{:.3f})".format(
                 train_file, self.epoch, self.best_valid_metric))
-```
 
-#### evaluate
 
-定制的部分在于换一下数据读入的方式、`loss`的计算方式、预测值`pred`的收集方式，`metric`计算方式。
-
-**TODO**：
-
-- 统一的`metric`计算方式，目前比较混乱
-
-```python
 def evaluate(args, model, valid_dataset, logger):
     eval_loss, nb_eval_steps = 0.0, 0
     labels, preds = None, None
     model.eval()
     for batch in valid_dataset:
-        ## 数据读入方式以及loss的计算方式
-        inputs_id, inputs_label, _ = tuple(t.to(args.device) for t in batch)
+        # FIXME 该处定制自己的输入
+        inputs = tuple(t.to(args.device) for t in batch)
+        # left_ids, right_ids, left_len, right_len, \
+        # left_char_id, right_char_id, left_char_len, right_char_len, label = tuple(t.to(self.args.device) for t in batch)
+        # inputs = {"text_a": left_ids, "text_b": right_ids,
+        #           "text_a_len": left_len, "text_b_len": right_len,
+        #           "text_a_char": left_char_id, "text_b_char": right_char_id,
+        #           "text_a_char_len": left_char_len, "text_b_char_len": right_char_len,
+        #           "label": label}
         with torch.no_grad():
-            logits = model(inputs_id)
-            tmp_eval_loss = F.cross_entropy(logits, inputs_label)
+            logits = model(inputs)
+            tmp_eval_loss = F.cross_entropy(logits, inputs["label"])
             if args.n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
 
             eval_loss += tmp_eval_loss.item()
         nb_eval_steps += 1
-		
-        ## 预测值的收集方式
-        if preds is None:
-            preds = logits.detach().cpu().numpy()
-            labels = inputs_label.detach().cpu().numpy()
-        else:
-            preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-            labels = np.append(labels, inputs_label.detach().cpu().numpy(), axis=0)
-	
-    ## 预测值与真实值计算的方式
+
+        # FIXME 该处定制自己的收集pred和labels
+        # if preds is None:
+        #     preds = logits.detach().cpu().numpy()
+        #     labels = inputs["label"].detach().cpu().numpy()
+        # else:
+        #     preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
+        #     labels = np.append(labels, inputs["label"].detach().cpu().numpy(), axis=0)
+
     eval_loss = eval_loss / nb_eval_steps
     preds = np.argmax(preds, axis=1)
     metrics = cal_performance(preds, labels)
@@ -330,39 +271,3 @@ def evaluate(args, model, valid_dataset, logger):
     for key in sorted(metrics.keys()):
         logger.info("  %s = %s", key.upper(), str(metrics[key]))
     return metrics
-```
-
-#### cal_performance
-
-定制在于引入并计算所需要的`metric`，返回的是字典。
-
-**TODO：**
-
-- 考虑是否需要使用MetricManager类
-
-```python
-def cal_performance(preds, labels):
-    ## 定制所需的metric计算方式以及收集方式
-    assert len(preds) == len(labels)
-    acc = (preds == labels).mean()
-    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
-    mertrics = {"acc": acc, "f1":f1}
-    return mertrics
-```
-
-#### inference
-
-**ongoing.....**
-
-#### ModelConfig
-
-在加载BasicConfig之后，读入改`model`必要的参数
-
-```python
-def ModelConfig(parser):
-    # 添加需要的参数
-    parser.add_argument("--what_you_want", type=int, default=None)
-    args, _ = parser.parse_known_args()
-    return args
-```
-

@@ -40,7 +40,6 @@ class Example(object):
 
 class InputFeatures(object):
     """A single set of features of data."""
-
     def __init__(self,
                  left_ids, right_ids, left_char_ids, right_char_ids, left_len, right_len, left_chars_len, right_chars_len, label):
         self.left_ids = left_ids
@@ -112,21 +111,20 @@ class MatchCorpus(object):
                      }
 
         logger.info("Saved text field to '{}'".format(self.field_text_file))
-        field_article = {"itos": self.field["text"].itos,
+        field_text = {"itos": self.field["text"].itos,
                          "stoi": self.field["text"].stoi,
                          "vocab_size": self.field["text"].vocab_size,
                          "specials": self.field["text"].specials
                          }
         logger.info("Saved text field to '{}'".format(self.field_char_file))
-        field_char_article = {"itos": self.field["char"].itos,
+        field_char = {"itos": self.field["char"].itos,
                          "stoi": self.field["char"].stoi,
                          "vocab_size": self.field["char"].vocab_size,
                          "specials": self.field["char"].specials
                          }
 
-
-        torch.save(field_article, self.field_text_file)
-        torch.save(field_char_article, self.field_char_file)
+        torch.save(field_text, self.field_text_file)
+        torch.save(field_char, self.field_char_file)
 
         logger.info("Saved data to '{}'".format(self.data_file))
         torch.save(self.data, self.data_file)
