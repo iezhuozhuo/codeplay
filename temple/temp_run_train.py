@@ -14,8 +14,8 @@ from train_utils import trainer
 # from ModelConfig import (
 #     modelconfig, modelclass
 # )
-from preprocessing import MatchCorpus
-from preprocessing import Example, InputFeatures
+from preprocessing_zh import MatchCorpus
+from preprocessing_zh import Example, InputFeatures
 from train_utils import evaluate
 
 from source.utils.engine import BasicConfig

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# @Time    : 2020/7/15 14:22
 # @Author  : zhuo & zdy
 # @github   : iezhuozhuo
 
@@ -19,15 +20,13 @@ import source.utils.Constant as constants
 from source.inputters.field import TextField, NumberField
 
 logger = init_logger()
-# user_dict_name = "/home/gong/zz/data/Match/dict_all.txt"
-# logger.info("loading {} user_dict".format(user_dict_name))
-# jieba.load_userdict(user_dict_name)
-#
-# stopwords_file = "/home/gong/zz/data/Match/stop_words.txt"
-# logger.info("loading {} stop word".format(stopwords_file))
-# stopwords = {line.strip(): 0 for line in open(stopwords_file, 'r', encoding="utf-8").readlines()}
+user_dict_name = "/home/gong/zz/data/Match/dict_all.txt"
+logger.info("loading {} user_dict".format(user_dict_name))
+jieba.load_userdict(user_dict_name)
 
-dic = {'entailment': '0', 'neutral': '1', 'contradiction': '2'}
+stopwords_file = "/home/gong/zz/data/Match/stop_words.txt"
+logger.info("loading {} stop word".format(stopwords_file))
+stopwords = {line.strip(): 0 for line in open(stopwords_file, 'r', encoding="utf-8").readlines()}
 
 
 class Example(object):
@@ -41,7 +40,6 @@ class Example(object):
 
 class InputFeatures(object):
     """A single set of features of data."""
-
     def __init__(self,
                  left_ids, right_ids, left_char_ids, right_char_ids, left_len, right_len, left_chars_len, right_chars_len, label):
         self.left_ids = left_ids
@@ -74,7 +72,6 @@ class MatchCorpus(object):
         self.min_freq = min_freq
         self.specials = specials
         # self.tokenizer = self.get_tokenizer()
-        self.label_dict = self.get_label()
 
         logger.info("Initial Corpus ...")
         self.field = {"text": TextField(tokenize_fn=None, special_tokens=self.specials),
@@ -114,20 +111,20 @@ class MatchCorpus(object):
                      }
 
         logger.info("Saved text field to '{}'".format(self.field_text_file))
-        field_article = {"itos": self.field["text"].itos,
+        field_text = {"itos": self.field["text"].itos,
                          "stoi": self.field["text"].stoi,
                          "vocab_size": self.field["text"].vocab_size,
                          "specials": self.field["text"].specials
                          }
         logger.info("Saved text field to '{}'".format(self.field_char_file))
-        field_char_article = {"itos": self.field["char"].itos,
+        field_char = {"itos": self.field["char"].itos,
                          "stoi": self.field["char"].stoi,
                          "vocab_size": self.field["char"].vocab_size,
                          "specials": self.field["char"].specials
                          }
 
-        torch.save(field_article, self.field_text_file)
-        torch.save(field_char_article, self.field_char_file)
+        torch.save(field_text, self.field_text_file)
+        torch.save(field_char, self.field_char_file)
 
         logger.info("Saved data to '{}'".format(self.data_file))
         torch.save(self.data, self.data_file)
@@ -142,26 +139,20 @@ class MatchCorpus(object):
         if not os.path.isfile(data_file):
             logger.info("{} data can't find".format(data_type))
             return None
+
+        f = open(data_file, 'r', encoding="utf-8")
         lines = []
-
-        with open(data_file) as f:
-            next(f)  # skip the header row
-            for line in f:
-                sents = line.strip().split('\t')
-                if sents[0] is '-':
-                    continue
-
-                words_in_left = sents[1].strip().split(' ')
-                words_in_left = [x for x in words_in_left if x not in ('(', ')')]
-
-
-                words_in_right = sents[2].strip().split(' ')
-                words_in_right = [x for x in words_in_right if x not in ('(', ')')]
-
-                label = self.label_dict[sents[0]]
-                lines.append(
-                    {"text_a": " ".join(words_in_left), "text_b": " ".join(words_in_right), "label": label,
-                     "char_a": "".join(words_in_left), "char_b": "".join(words_in_right)})
+        for i, line in enumerate(f):
+            if i % 10000 == 0:
+                logger.info("Read {} examples from {}".format(len(lines), data_type.upper()))
+            # FIXME 全量数据
+            # if len(lines) >= 20000:
+            #     break
+            line_items = [item for item in line.strip().split("\t") if item]
+            text_a_tokens = self.tokenizer(line_items[1])
+            text_b_tokens = self.tokenizer(line_items[2])
+            lines.append({"text_a": " ".join(text_a_tokens), "text_b": " ".join(text_b_tokens), "label": line_items[3],
+                          "char_a": "".join(text_a_tokens), "char_b": "".join(text_b_tokens)})
 
         logger.info("Read total {} examples from {}".format(len(lines), data_type.upper()))
         f.close()
@@ -259,15 +250,15 @@ class MatchCorpus(object):
     def tokenizer(self, line):
         # jieba.enable_parallel()
         line_clean = re.sub("[0-9\s+\.\!\/_,$%^*()?;；:-【】+\"\']+|[+——！，;:。？、~@#￥%……&*（）]+", "", line)
-        # words = jieba.cut(line_clean.strip())
-        # word_list = list(words)
-        # words_clean = []
-        # for word in word_list:
-        #     if word not in stopwords:
-        #         words_clean.append(word)
-        #
-        # # jieba.disable_parallel()
-        return #words_clean
+        words = jieba.cut(line_clean.strip())
+        word_list = list(words)
+        words_clean = []
+        for word in word_list:
+            if word not in stopwords:
+                words_clean.append(word)
+
+        # jieba.disable_parallel()
+        return words_clean
 
     def convert_examples_to_features(self, examples, data_type="train"):
         features = []
@@ -287,7 +278,6 @@ class MatchCorpus(object):
             if len(text_b_words) > self.args.max_seq_length:
                 text_b_words = text_b_words[:self.args.max_seq_length]
             right_len = len(text_b_words)
-
             left_ids, right_ids, left_char_ids, right_char_ids = [], [], [], []
             char_a_len, char_b_len = [], []
             for i, word in enumerate(text_a_words):
@@ -370,11 +360,6 @@ class MatchCorpus(object):
         padding_length = max_len - len(seq)
         seq += [pad_id] * padding_length
         return seq
-
-    def get_label(self):
-        label_list = ['entailment', 'neutral', 'contradiction']
-        label_dict = {label: i for i, label in enumerate(label_list)}
-        return label_dict
 
 
 if __name__ == "__main__":

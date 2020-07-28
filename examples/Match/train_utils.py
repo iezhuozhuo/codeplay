@@ -14,19 +14,21 @@ import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
 from source.utils.engine import Trainer
+from source.callback.lr_scheduler import get_linear_schedule_with_warmup
 
 
 def cal_performance(preds, labels):
     assert len(preds) == len(labels)
     acc = (preds == labels).mean()
     f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
-    mertrics = {"acc": acc, "f1":f1}
+    mertrics = {"acc": acc, "f1": f1}
     return mertrics
 
 
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
-                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None, save_summary=False):
+                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None,
+                 save_summary=False):
 
         super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, save_dir,
                          num_epochs, log_steps, valid_steps, grad_clip, lr_scheduler, model_log, save_summary)
@@ -70,7 +72,8 @@ class trainer(Trainer):
             self.model.train()
 
             left_ids, right_ids, left_len, right_len, \
-            left_char_id, right_char_id, left_char_len, right_char_len, label = tuple(t.to(self.args.device) for t in batch)
+            left_char_id, right_char_id, left_char_len, right_char_len, label = tuple(
+                t.to(self.args.device) for t in batch)
             inputs = {"text_a": left_ids, "text_b": right_ids,
                       "text_a_len": left_len, "text_b_len": right_len,
                       "text_a_char": left_char_id, "text_b_char": right_char_id,
@@ -113,6 +116,7 @@ class trainer(Trainer):
                 # logging_loss = tr_loss / self.global_step
                 self.logger.info("the current train_steps is {}".format(self.global_step))
                 self.logger.info("the current logging_loss is {}".format(loss.item()))
+                self.logger.info("the current lr is {}".format(self.optimizer.param_groups[0]['lr']))
 
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
@@ -127,7 +131,7 @@ class trainer(Trainer):
                 if is_best:
                     self.best_valid_metric = cur_valid_metric
                     self.model_log.add_best_result(
-                        best_name="best_"+self.valid_metric_name, best_value=cur_valid_metric, best_epoch=self.epoch)
+                        best_name="best_" + self.valid_metric_name, best_value=cur_valid_metric, best_epoch=self.epoch)
                 self.save(is_best)
                 self.model_log.add_metric(metric_name="test_F1", metric_value=metrics["f1"], epoch=self.epoch)
                 self.model_log.add_metric(metric_name="test_acc", metric_value=metrics["acc"], epoch=self.epoch)
@@ -141,7 +145,8 @@ class trainer(Trainer):
     def train(self):
         if self.args.max_steps > 0:
             t_total = self.args.max_steps
-            self.args.num_train_epochs = self.args.max_steps // (len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
+            self.args.num_train_epochs = self.args.max_steps // (
+                        len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
         else:
             t_total = len(self.train_iter) // self.args.gradient_accumulation_steps * self.args.num_train_epochs
 
@@ -174,7 +179,8 @@ class trainer(Trainer):
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
             self.model = torch.nn.parallel.DistributedDataParallel(
-                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank, find_unused_parameters=True,
+                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank,
+                find_unused_parameters=True,
             )
 
         for _ in range(int(self.num_epochs)):

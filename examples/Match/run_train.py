@@ -21,6 +21,9 @@ from ModelConfig import (
     ESIMConfig, ESIMModel,
     DIINConfig, DIINModel
 )
+# from preprocessing_zh import MatchCorpus
+# from preprocessing_zh import Example, InputFeatures
+
 from preprocessing import MatchCorpus
 from preprocessing import Example, InputFeatures
 
@@ -28,7 +31,7 @@ from source.utils.engine import BasicConfig
 import source.utils.Constant as constants
 from source.utils.misc import set_seed, checkoutput_and_setcuda, init_logger
 from source.callback.optimizater.adamw import AdamW
-from source.callback.lr_scheduler import get_linear_schedule_with_warmup
+from source.callback.lr_scheduler import get_lr_schedule
 from source.modules.embedder import Embedder
 
 
@@ -58,20 +61,24 @@ def main():
 
     model_log = ModelLog(nick_name='zhuo', project_name='DeepMatch', project_remark='')
     model_log.add_model_name(model_name=args.model_type.upper())
-    if args.aug:
-        model_log.add_model_remark(remark='使用aug')
-    else:
-        model_log.add_model_remark(remark='不使用aug')
+    # if args.aug:
+    #     model_log.add_model_remark(remark='使用aug')
+    # else:
+    #     model_log.add_model_remark(remark='不使用aug')
 
     specials = [constants.PAD_WORD, constants.UNK_WORD]
     processor = MatchCorpus(args, specials=specials)
     padding_idx = processor.field["text"].stoi[constants.PAD_WORD]
     args.padding_idx = padding_idx
+    args.num_class = len(processor.label_dict)
     args.num_char_embedding = len(processor.field["char"].stoi)
     embedded_pretrain = Embedder(num_embeddings=processor.field["text"].vocab_size,
-                                 embedding_dim=128, padding_idx=padding_idx)
-    embedded_pretrain.load_embeddingsfor_gensim_vec("/home/gong/zz/data/Match/word2vec.model",
-                                                    processor.field["text"].stoi)
+                                 embedding_dim=300, padding_idx=padding_idx)
+    # embedded_pretrain.load_embedding_from_gensim_vec("/home/gong/zz/data/embedding/word2vec.840B.300d.txt",
+    #                                                 processor.field["text"].stoi)
+    embedded_pretrain.load_embedding_from_gensim_vec("/home/gong/zz/data/embedding/word2vec.npy",
+                                                     processor.field["text"].stoi)
+    args.max_char_seq_length = 16
 
     logger.info(args)
     model_log.add_param(param_dict=vars(args), param_type='py_param')
@@ -91,6 +98,8 @@ def main():
         args.logging_steps = len(train_dataloader) // args.gradient_accumulation_steps // 5
         args.valid_steps = len(train_dataloader)
 
+        lr_scheduler = get_lr_schedule(args=args, train_iter_num=len(train_dataloader), optimizer=optimizer)
+
         trainer_op = trainer(args=args,
                              model=model,
                              optimizer=optimizer,
@@ -99,6 +108,7 @@ def main():
                              logger=logger,
                              num_epochs=args.num_train_epochs,
                              save_dir=args.output_dir,
+                             lr_scheduler=lr_scheduler,
                              log_steps=args.logging_steps,
                              valid_steps=args.valid_steps,
                              valid_metric_name="+f1",

@@ -6,7 +6,7 @@ from seqeval.metrics import f1_score
 
 import torch
 
-from preprocessing import get_entities
+from preprocessing_zh import get_entities
 
 
 def cal_performance(preds, labels):

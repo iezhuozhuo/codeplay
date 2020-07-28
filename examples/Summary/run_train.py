@@ -6,7 +6,7 @@ import numpy as np
 from torch.optim import adam
 
 from train_utils import trainer
-from preprocessing import SummaGenCorpus
+from preprocessing_zh import SummaGenCorpus
 from ModelConfig import configs, PointNetworkModel
 from Metrics import BeamSearch
 

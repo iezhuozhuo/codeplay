@@ -125,6 +125,7 @@ def BasicConfig():
     )
 
     # learning rate and grad
+    parser.add_argument("--lr_schedule_type", default="linear", type=str, help="lr_schedule_type")
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
     parser.add_argument("--warmup_proportion", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1 = 10% of training.")

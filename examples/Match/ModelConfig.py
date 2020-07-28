@@ -7,6 +7,10 @@ from source.models.deepmatch import ArcI, ArcII, MVLSTM, MatchPyramid, MwAN, bim
 
 
 def ARCIConfig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
+    parser.add_argument("--mlp_num_layers", default=2, type=int)
+    parser.add_argument("--mlp_num_units", default=128, type=int)
+    parser.add_argument("--mlp_num_fan_out", default=64, type=int)
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()
     return args
@@ -14,6 +18,7 @@ def ARCIConfig(parser):
 
 def ARCIModel(args, embedd):
     model = ArcI(
+        args=args,
         embedd=embedd,
         left_filters=[32],
         left_kernel_sizes=[3],
@@ -27,6 +32,7 @@ def ARCIModel(args, embedd):
 
 
 def ARCIIConfig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()
     return args
@@ -34,9 +40,8 @@ def ARCIIConfig(parser):
 
 def ARCIIModel(args, embedd):
     model = ArcII(
+        args=args,
         embedd=embedd,
-        left_length=args.max_seq_length,
-        right_length=args.max_seq_length,
         kernel_1d_count=32,
         kernel_1d_size=3,
         kernel_2d_count=[32],
@@ -49,7 +54,12 @@ def ARCIIModel(args, embedd):
 
 
 def MVLSTMConfig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
     parser.add_argument("--hidden_size", default=128, type=int)
+    parser.add_argument("--mlp_num_layers", default=2, type=int)
+    parser.add_argument("--mlp_num_units", default=128, type=int)
+    parser.add_argument("--mlp_num_fan_out", default=64, type=int)
+    parser.add_argument("--top_k", default=10, type=int)
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()
     return args
@@ -57,13 +67,11 @@ def MVLSTMConfig(parser):
 
 def MVLSTMoel(args, embedd):
     model = MVLSTM(
+        args=args,
         embedd=embedd,
-        hidden_size=128,
+        hidden_size=args.hidden_size,
         num_layers=2,
-        top_k=10,
-        mlp_num_layers=2,
-        mlp_num_units=64,
-        mlp_num_fan_out=64,
+        top_k=args.top_k,
         activation_func='relu',
         dropout_rate=0.5,
         bidirectional=True)
@@ -71,8 +79,11 @@ def MVLSTMoel(args, embedd):
     return model
 
 
-def MatchPyramidConig():
-    pass
+def MatchPyramidConig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
+    parser.add_argument("--aug", action="store_true")
+    args, _ = parser.parse_known_args()
+    return args
 
 
 def MatchPyramidModel():
@@ -99,6 +110,7 @@ def MwANModel(args, embedd):
 
 
 def MwANConfig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
     parser.add_argument("--hidden_size", default=128, type=int)
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()
@@ -116,6 +128,7 @@ def BiMPMModule(args, embedd):
 
 
 def BiMPMConfig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
     parser.add_argument("--num_perspective", default=4, type=int)
     parser.add_argument("--hidden_size", default=128, type=int)
     parser.add_argument("--aug", action="store_true")
@@ -138,6 +151,7 @@ def ESIMModel(args, embedd):
 
 
 def ESIMConfig(parser):
+    parser.add_argument("--num_class", default=2, type=int)
     parser.add_argument("--hidden_size", default=128, type=int)
     parser.add_argument("--aug", action="store_true")
     args, _ = parser.parse_known_args()
@@ -159,15 +173,16 @@ def DIINModel(args, embedd):
 
 
 def DIINConfig(parser):
+    parser.add_argument("--num_class", default=3, type=int)
     parser.add_argument("--hidden_size", default=128, type=int)
     parser.add_argument("--aug", action="store_true")
     parser.add_argument("--use_char", action="store_true")
     parser.add_argument('--char_embedding_dim', default=8, type=int)
-    parser.add_argument('--char_conv_filters', default=100, type=int)
-    parser.add_argument('--char_conv_kernel_size', default=5, type=int)
+    parser.add_argument('--char_conv_filters', default=128, type=int)
+    parser.add_argument('--char_conv_kernel_size', default=2, type=int)
     parser.add_argument('--nb_dense_blocks', default=3, type=int)
     parser.add_argument('--layers_per_dense_block', default=8, type=int)
     parser.add_argument('--growth_rate', default=20, type=int)
-    parser.add_argument("--max_char_seq_length", default=5, type=int)
+    parser.add_argument("--max_char_seq_length", default=16, type=int)
     args, _ = parser.parse_known_args()
     return args

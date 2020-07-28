@@ -18,15 +18,14 @@ from source.modules.densenet import DenseNet, SemanticComposite
 
 class ArcI(nn.Module):
     def __init__(self,
+                 args,
                  embedd=None,
                  left_filters=None,
                  left_kernel_sizes=None,
                  left_pool_sizes=None,
-                 left_length=32,
                  right_filters=None,
                  right_kernel_sizes=None,
                  right_pool_sizes=None,
-                 right_length=32,
                  conv_activation_func='relu',
                  dropout_rate=0.5
                  ):
@@ -44,7 +43,7 @@ class ArcI(nn.Module):
         :param dropout_rate: 基本上没有用
         """
         super(ArcI, self).__init__()
-
+        self.args = args
         if embedd is None:
             raise Exception("The embdding layer is None")
 
@@ -71,8 +70,8 @@ class ArcI(nn.Module):
         self.right_pool_sizes = right_pool_sizes
         self.conv_activation_func = conv_activation_func
         self.dropout_rate = dropout_rate
-        self.left_length = left_length
-        self.right_length = right_length
+        self.left_length = args.max_seq_length
+        self.right_length = args.max_seq_length
 
         self.build()
 
@@ -139,14 +138,16 @@ class ArcI(nn.Module):
             right_length = right_length // ps
 
         self.mlp = quickly_multi_layer_perceptron_layer(
-            left_length * self.left_filters[-1] + (
-                    right_length * self.right_filters[-1])
+            in_features=left_length * self.left_filters[-1] + (right_length * self.right_filters[-1]),
+            mlp_num_layers=self.args.mlp_num_layers,
+            mlp_num_units=self.args.mlp_num_units,
+            mlp_num_fan_out=self.args.mlp_num_fan_out,
         )
 
         self.out = quickly_output_layer(
             task="classify",
-            num_classes=2,
-            in_features=64
+            num_classes=self.args.num_class,
+            in_features=self.args.mlp_num_fan_out
         )
 
         self.dropout = nn.Dropout(p=self.dropout_rate)
@@ -172,32 +173,9 @@ class ArcI(nn.Module):
 
 
 class ArcII(nn.Module):
-    def __int__(self,
-                embedd=None,
-                left_length=32,
-                right_length=32,
-                kernel_1d_count=32,
-                kernel_1d_size=3,
-                kernel_2d_count=None,
-                kernel_2d_size=None,
-                pool_2d_size=None,
-                conv_activation_func='relu',
-                dropout_rate=0.5
-                ):
-        """
-        :param embedd:
-        :param left_length:
-        :param right_length:
-        :param kernel_1d_count:
-        :param kernel_1d_size:
-        :param kernel_2d_count:
-        :param kernel_2d_size:
-        :param pool_2d_size:
-        :param conv_activation_func:
-        :param dropout_rate:
-        :return:
-        """
-        super(ArcII, self).__int__()
+    def __init__(self, args, embedd=None, kernel_1d_count=32, kernel_1d_size=3, kernel_2d_count=None,
+                 kernel_2d_size=None, pool_2d_size=None, conv_activation_func='relu', dropout_rate=0.5):
+        super().__init__()
 
         if embedd is None:
             raise Exception("The embdding layer is None")
@@ -208,10 +186,11 @@ class ArcII(nn.Module):
         if kernel_2d_count is None:
             kernel_2d_count = [32]
 
+        self.args = args
         self.embedding = embedd
         self.embedding_dim = embedd.embedding_dim
-        self.left_length = left_length
-        self.right_length = right_length
+        self.left_length = self.args.max_seq_length
+        self.right_length = self.args.max_seq_length
         self.kernel_1d_count = kernel_1d_count
         self.kernel_1d_size = kernel_1d_size
         self.kernel_2d_count = kernel_2d_count
@@ -251,7 +230,7 @@ class ArcII(nn.Module):
             *self.kernel_2d_count[:-1]
         ]
         conv2d = [
-            self._make_conv_pool_block(ic, oc, ks, activation, ps)
+            self.quickly_conv_pool_back(ic, oc, ks, activation, ps)
             for ic, oc, ks, ps in zip(in_channel_2d,
                                       self.kernel_2d_count,
                                       self.kernel_2d_size,
@@ -269,9 +248,9 @@ class ArcII(nn.Module):
             right_length = right_length // ps[1]
 
         # Build output
-        self.out = self.quickly_output_layer(
+        self.out = quickly_output_layer(
             task="classify",
-            num_classes=2,
+            num_classes=self.args.num_class,
             in_features=left_length * right_length * self.kernel_2d_count[-1]
         )
 
@@ -329,18 +308,17 @@ class ArcII(nn.Module):
 
 class MVLSTM(nn.Module):
     def __init__(self,
+                 args,
                  embedd=None,
                  hidden_size=128,
                  num_layers=1,
                  top_k=50,
-                 mlp_num_layers=2,
-                 mlp_num_units=64,
-                 mlp_num_fan_out=64,
                  activation_func='relu',
                  dropout_rate=0.5,
                  bidirectional=True
                  ):
         super(MVLSTM, self).__init__()
+        self.args = args
         if embedd is None:
             raise Exception("The embdding layer is None")
         self.embedding = embedd
@@ -349,9 +327,9 @@ class MVLSTM(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.top_k = top_k
-        self.mlp_num_layers = mlp_num_layers
-        self.mlp_num_units = mlp_num_units
-        self.mlp_num_fan_out = mlp_num_fan_out
+        self.mlp_num_layers = self.args.mlp_num_layers
+        self.mlp_num_units = self.args.mlp_num_units
+        self.mlp_num_fan_out = self.args.mlp_num_fan_out
         self.activation_func = activation_func
         self.dropout_rate = dropout_rate
         self.bidirectional = bidirectional
@@ -487,7 +465,7 @@ class MatchPyramid(nn.Module):
         # Build output
         self.out = self.quickly_output_layer(
             task="classify",
-            num_classes=2,
+            num_classes=self.args.num_class,
             in_features=left_length * right_length * self.kernel_count[-1]
         )
 
@@ -558,6 +536,7 @@ class MatchSRNN(nn.Module):
 class MIX(nn.Module):
     def __init__(self):
         super(MIX, self).__init__()
+
     """
     参考： https://github.com/hanzhenlei767/NLP_Learn/tree/4a780c08788e7b4184c7bf42c3db1423532637ba/%E6%96%87%E6%9C%AC%E5%8C%B9%E9%85%8D
     """
@@ -639,7 +618,7 @@ class MwAN(nn.Module):
         self.W2 = nn.Linear(self.hidden_size * self.num_directions, self.hidden_size, bias=False)
         self.V = nn.Linear(self.hidden_size, 1, bias=False)
         self.output = quickly_output_layer(
-            task="classify", num_classes=2, in_features=self.num_directions * self.hidden_size)
+            task="classify", num_classes=self.args.num_class, in_features=self.num_directions * self.hidden_size)
 
         self.initiation()
 
@@ -701,7 +680,7 @@ class MwAN(nn.Module):
         # 原文公式 8a-8e
         attn_rep, hp = x
         xj = torch.cat([attn_rep, hp], dim=2)
-        gj = F.sigmoid(self.Wg(xj))
+        gj = torch.sigmoid(self.Wg(xj))
         xj_ = gj * xj
         self.gru_inter_agg.flatten_parameters()
         x, _ = self.gru_inter_agg(xj_)
@@ -717,9 +696,10 @@ class MwAN(nn.Module):
         x_cat_ = torch.squeeze(self.Wx(x_cat))
         # (B, L, 4 + L, 4)-> B, 4, L with L*1 -> B, 4, 1
         x_cat_v = x_cat_ + self.vx
-        cross_attn = F.softmax(self.Vx(x_cat_v.transpose(2, 1)))
-        # B, L, 1, num_direction * rnn_hidden
-        x = torch.einsum("blad,bac->bldc",
+        cross_attn = F.softmax(self.Vx(x_cat_v.transpose(2, 1)).squeeze(), dim=1)
+        # FIXME check this einsum
+        # B, L, num_direction * rnn_hidden
+        x = torch.einsum("blad,ba->bld",
                          x_cat,
                          cross_attn).squeeze()
         # x = cross_attn.bmm(x_cat)
@@ -746,6 +726,7 @@ class MwAN(nn.Module):
 # Bimpm
 class bimpm(nn.Module):
     def __init__(self,
+                 args,
                  embedd=None,
                  num_perspective=4,
                  hidden_size=128,
@@ -754,6 +735,7 @@ class bimpm(nn.Module):
 
         if embedd is None:
             raise Exception("The embdding layer is None")
+        self.args = args
         self.embedding = embedd
         self.embedding_dim = embedd.embedding_dim
         self.hidden_size = hidden_size
@@ -788,7 +770,7 @@ class bimpm(nn.Module):
             self.hidden_size * 2)
         self.pred_fc2 = quickly_output_layer(
             task="classify",
-            num_classes=2,
+            num_classes=self.args.num_class,
             in_features=self.hidden_size * 2)
 
         self.dropout = nn.Dropout(dropout_rate)
@@ -939,7 +921,7 @@ class bimpm(nn.Module):
         x = self.pred_fc2(x)
 
         return x
-    
+
 
 # ESIM
 class ESIM(nn.Module):
@@ -978,9 +960,9 @@ class ESIM(nn.Module):
 
         self.rnn_encoder = StackedBRNN(
             input_size=self.embedding_dim,
-            hidden_size=int(rnn_size/2),
+            hidden_size=int(rnn_size / 2),
             num_layers=self.num_layer,
-            dropout_rate=self.drop_rate ,
+            dropout_rate=self.drop_rate,
             dropout_output=self.drop_rnn,
             rnn_type=rnn_mapping[self.rnn_type],
             concat_layers=self.concat_rnn
@@ -1015,7 +997,7 @@ class ESIM(nn.Module):
         )
         self.out = quickly_output_layer(
             task="classify",
-            num_classes=2,
+            num_classes=self.args.num_class,
             in_features=self.hidden_size)
 
     def forward(self, inputs):
@@ -1193,7 +1175,7 @@ class DIIN(nn.Module):
         # Output
         self.out_layer = quickly_output_layer(
             task="classify",
-            num_classes=2,
+            num_classes=self.args.num_class,
             in_features=self.dense_net.out_channels)
 
         self.dropout = nn.Dropout(p=self.dropout_rate)
