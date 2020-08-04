@@ -32,7 +32,7 @@ class KnowledgeSeq2Seq(BaseModel):
     """
     def __init__(self, src_vocab_size, tgt_vocab_size, embed_size, hidden_size, padding_idx=None,
                  num_layers=1, bidirectional=True, attn_mode="mlp", attn_hidden_size=None, 
-                 with_bridge=False, tie_embedding=False, dropout=0.0, use_gpu=False, use_bow=False,
+                 with_bridge=False, tie_embedding=False, dropout=0.0, use_gpu=True, use_bow=False,
                  use_kd=False, use_dssm=False, use_posterior=False, weight_control=False, 
                  use_pg=False, use_gs=False, concat=False, pretrain_epoch=0):
         super(KnowledgeSeq2Seq, self).__init__()
@@ -141,23 +141,23 @@ class KnowledgeSeq2Seq(BaseModel):
         encode
         """
         outputs = Pack()
-        enc_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1]-2
+        enc_inputs = _, lengths = inputs['post'][:, 1:-1], inputs['post_length']-2
         enc_outputs, enc_hidden = self.encoder(enc_inputs, hidden)
 
         if self.with_bridge:
             enc_hidden = self.bridge(enc_hidden)
 
         # knowledge
-        batch_size, sent_num, sent = inputs.cue[0].size()
-        tmp_len = inputs.cue[1]
+        batch_size, sent_num, sent = inputs['kg'].size()
+        tmp_len = inputs['kg_hrt_length']
         tmp_len[tmp_len > 0] -= 2
-        cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], tmp_len.view(-1)
+        cue_inputs = inputs['kg'].view(-1, sent)[:, 1:-1], tmp_len.view(-1)
         cue_enc_outputs, cue_enc_hidden = self.knowledge_encoder(cue_inputs, hidden)
         cue_outputs = cue_enc_hidden[-1].view(batch_size, sent_num, -1)
         # Attention
         weighted_cue, cue_attn = self.prior_attention(query=enc_hidden[-1].unsqueeze(1),
                                                       memory=cue_outputs,
-                                                      mask=inputs.cue[1].eq(0))
+                                                      mask=inputs['kg_hrt_length'].eq(0))
         cue_attn = cue_attn.squeeze(1)
         outputs.add(prior_attn=cue_attn)
         indexs = cue_attn.max(dim=1)[1]
@@ -169,7 +169,7 @@ class KnowledgeSeq2Seq(BaseModel):
             knowledge = weighted_cue
 
         if self.use_posterior:
-            tgt_enc_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1]-2
+            tgt_enc_inputs = inputs['resp'][:, 1:-1], inputs['resp_length']-2
             _, tgt_enc_hidden = self.knowledge_encoder(tgt_enc_inputs, hidden)
             posterior_weighted_cue, posterior_attn = self.posterior_attention(
                 # P(z|u,r)
@@ -177,7 +177,7 @@ class KnowledgeSeq2Seq(BaseModel):
                 # P(z|r)
                 query=tgt_enc_hidden[-1].unsqueeze(1),
                 memory=cue_outputs,
-                mask=inputs.cue[1].eq(0))
+                mask=inputs['kg_hrt_length'].eq(0))
             posterior_attn = posterior_attn.squeeze(1)
             outputs.add(posterior_attn=posterior_attn)
             # Gumbel Softmax
@@ -243,15 +243,19 @@ class KnowledgeSeq2Seq(BaseModel):
         log_prob, state, output = self.decoder.decode(input, state)
         return log_prob, state, output
 
-    def forward(self, enc_inputs, dec_inputs, hidden=None, is_training=False):
+    def forward(self, enc_inputs, dec_inputs, hidden=None, is_training=False, epoch=-1):
         """
         forward
         """
+        target = enc_inputs['resp'][:, 1:]
         outputs, dec_init_state = self.encode(
                 enc_inputs, hidden, is_training=is_training)
         log_probs, _ = self.decoder(dec_inputs, dec_init_state)
         outputs.add(logits=log_probs)
-        return outputs
+        self.metrics, self.scores = self.collect_metrics(outputs, target, epoch=epoch)
+        loss = self.metrics.loss
+        acc = self.metrics.acc
+        return loss, acc
 
     def collect_metrics(self, outputs, target, epoch=-1):
         """
@@ -323,29 +327,29 @@ class KnowledgeSeq2Seq(BaseModel):
         metrics.add(loss=loss)
         return metrics, scores
 
-    def iterate(self, inputs, optimizer=None, grad_clip=None, is_training=False, epoch=-1):
-        """
-        iterate
-        """
-        enc_inputs = inputs
-        dec_inputs = inputs.tgt[0][:, :-1], inputs.tgt[1] - 1
-        target = inputs.tgt[0][:, 1:]
+    # def iterate(self, inputs, optimizer=None, grad_clip=None, is_training=False, epoch=-1):
+    #     """
+    #     iterate
+    #     """
+        # enc_inputs = inputs
+        # dec_inputs = inputs.tgt[0][:, :-1], inputs.tgt[1] - 1
+        # target = inputs.tgt[0][:, 1:]
 
-        outputs = self.forward(enc_inputs, dec_inputs, is_training=is_training)
-        metrics, scores = self.collect_metrics(outputs, target, epoch=epoch)
+        # outputs = self.forward(enc_inputs, dec_inputs, is_training=is_training)
+        # metrics, scores = self.collect_metrics(outputs, target, epoch=epoch)
 
-        loss = metrics.loss
-        if torch.isnan(loss):
-            raise ValueError("nan loss encountered")
-
-        if is_training:
-            if self.use_pg:
-                self.baseline = 0.99 * self.baseline + 0.01 * metrics.reward.item()
-            assert optimizer is not None
-            optimizer.zero_grad()
-            loss.backward()
-            if grad_clip is not None and grad_clip > 0:
-                clip_grad_norm_(parameters=self.parameters(),
-                                max_norm=grad_clip)
-            optimizer.step()
-        return metrics, scores
+        # loss = metrics.loss
+        # if torch.isnan(loss):
+        #     raise ValueError("nan loss encountered")
+        #
+        # if is_training:
+        #     if self.use_pg:
+        #         self.baseline = 0.99 * self.baseline + 0.01 * metrics.reward.item()
+        #     assert optimizer is not None
+        #     optimizer.zero_grad()
+        #     loss.backward()
+        #     if grad_clip is not None and grad_clip > 0:
+        #         clip_grad_norm_(parameters=self.parameters(),
+        #                         max_norm=grad_clip)
+        #     optimizer.step()
+        # return metrics, scores
