@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data.dataset import TensorDataset
 from tensorboardX import SummaryWriter
 
-from preprocessing import bert_extract_item
+from preprocessing_zh import bert_extract_item
 from Metric import Metrics, SpanEntityScore, cal_performance
 
 from source.utils.engine import Trainer

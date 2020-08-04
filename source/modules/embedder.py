@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 import gensim
+from gensim.models import KeyedVectors
 
 import torch
 import torch.nn as nn
@@ -26,9 +27,10 @@ class Embedder(nn.Embedding):
         print("{} words have pretrained embeddings".format(num_known),
               "(coverage: {:.3f})".format(num_known / self.num_embeddings))
 
-    def load_embeddingsfor_gensim_vec(self, gensim_model_path, stoi, scale=0.05):
+    def load_embeddings_from_gensim_model(self, gensim_model_path, stoi, scale=0.05):
         weight = torch.zeros(self.num_embeddings, self.embedding_dim)
         model = gensim.models.Word2Vec.load(gensim_model_path)
+
         # word_vec_dict = pd.read_csv(file, encoding="utf-8")
         num_known = 0
         for word in stoi:
@@ -41,6 +43,34 @@ class Embedder(nn.Embedding):
         self.weight.data.copy_(weight)
         print("{} words have pretrained embeddings".format(num_known),
               "(coverage: {:.3f})".format(num_known / self.num_embeddings))
+
+    def load_embedding_from_gensim_vec(self, gensim_vec_path, stoi, scale=0.05, save=True):
+        print("load {} num word embedding".format(len(stoi)))
+        if save and gensim_vec_path.split(".")[-1] == "npy":
+            print("load npy word embedding")
+            weight = torch.tensor(np.load(gensim_vec_path))
+
+        else:
+            weight = torch.zeros(self.num_embeddings, self.embedding_dim)
+            # model = KeyedVectors.load_word2vec_format(gensim_vec_path, limit=500000)
+            model = KeyedVectors.load_word2vec_format(gensim_vec_path)
+            num_known = 0
+            for word in stoi:
+                # try https://cloud.tencent.com/developer/article/1081196
+                if word in model.wv.index2word:
+
+                    weight[stoi[word]] = torch.from_numpy(model.wv[word])
+                    num_known += 1
+                else:
+                    nn.init.uniform_(weight[stoi[word]], -scale, scale)
+            print("{} words have pretrained embeddings".format(num_known),
+                  "(coverage: {:.3f})".format(num_known / self.num_embeddings))
+            if save:
+                gensim_npz_path = gensim_vec_path.split(".")[0] + ".npy"
+                np.save(gensim_npz_path, weight.numpy())
+
+        self.weight.data.copy_(weight)
+
 
 
 class PositionalEncoding(nn.Module):

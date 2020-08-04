@@ -4,7 +4,7 @@ import numpy as np
 
 import torch
 
-from preprocessing import CNERCorpus
+from preprocessing_zh import CNERCorpus
 from train_utils import set_seed, checkoutput_and_setcuda, init_logger, trainer, load_pretrain_embed, evaluate
 from ModelConfig import (
             RNNCRFConfig,

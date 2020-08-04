@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 from transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
 
-from preprocessing import (CnerProcessor, CnerProcessorSpan, CNerTokenizer, load_and_cache_examples,
-                           collate_fn_normal, collate_fn_span)
+from preprocessing_zh import (CnerProcessor, CnerProcessorSpan, CNerTokenizer, load_and_cache_examples,
+                              collate_fn_normal, collate_fn_span)
 from train_utils import (
     set_seed, checkoutput_and_setcuda, init_logger, get_optimizer_grouped_parameters,
     trainer, evaluate, evaluate_bert_normal, evaluate_bert_span)
