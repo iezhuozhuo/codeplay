@@ -299,7 +299,7 @@ def evaluate(file_path):
 # MRC中的性能指标
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""
-    import re 
+    import re
     def remove_articles(text):
         regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
         return re.sub(regex, " ", text)
