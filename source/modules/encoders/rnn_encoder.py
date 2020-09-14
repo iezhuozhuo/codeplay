@@ -161,7 +161,8 @@ class GRUEncoder(nn.Module):
                  rnn_hidden_size=None,
                  num_layers=1,
                  bidirectional=True,
-                 dropout=0.0):
+                 dropout=0.0,
+                 output_type="seq2seq"):
         super(GRUEncoder, self).__init__()
 
         self.num_directions = 2 if bidirectional else 1
@@ -178,6 +179,7 @@ class GRUEncoder(nn.Module):
         self.num_layers = num_layers
         self.bidirectional = bidirectional
         self.dropout = dropout
+        self.output_type= output_type
 
         self.rnn = nn.GRU(input_size=self.input_size,
                           hidden_size=self.rnn_hidden_size,
@@ -233,6 +235,11 @@ class GRUEncoder(nn.Module):
             _, inv_indices = indices.sort()
             outputs = outputs.index_select(0, inv_indices)
             last_hidden = last_hidden.index_select(1, inv_indices)
+
+        if self.output_type == "seq2seq":
+            encoder_feature = outputs.view(-1, self.num_directions * self.rnn_hidden_size)
+            encoder_feature = self.W_h(encoder_feature)
+            return outputs, encoder_feature, last_hidden
 
         return outputs, last_hidden
 

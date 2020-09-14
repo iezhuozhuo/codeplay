@@ -38,9 +38,11 @@ class Field(object):
     """
     def __init__(self,
                  sequential=False,
-                 dtype=None):
+                 dtype=None,
+                 online=False):
         self.sequential = sequential
         self.dtype = dtype if dtype is not None else int
+        self.online = online
 
     def str2num(self, string):
         """
@@ -301,6 +303,7 @@ class TextField(Field):
     def __init__(self,
                  tokenize_fn=None,
                  special_tokens=None,
+                 online=False
                  ):
         super(TextField, self).__init__(sequential=True,
                                         dtype=int)
@@ -313,10 +316,14 @@ class TextField(Field):
                     self.specials.append(token)
 
         self.itos = []
+        # 保证 pad_index=0, unk_idx=1
+        self.itos.extend(self.specials)
         self.stoi = {}
         self.vocab_size = 0
+        self.online = online
+        self.counter = Counter()
 
-    def build_vocab(self, texts, min_freq=1, max_size=None):
+    def build_vocab(self, texts, min_freq=1, max_size=None, stop_words=None):
         """
         build_vocab
         """
@@ -333,28 +340,27 @@ class TextField(Field):
                 else:
                     flat_xs += flatten(x)
             return flat_xs
-
-        # flatten texts
-        texts = flatten(texts)
-
-        counter = Counter()
-        for string in tqdm(texts):
-            tokens = self.tokenize_fn(string)
-            counter.update(tokens)
+        if not self.online:
+            # flatten texts
+            texts = flatten(texts)
+            # self.counter = Counter()
+            for string in tqdm(texts):
+                tokens = self.tokenize_fn(string)
+                self.counter.update(tokens)
 
         # frequencies of special tokens are not counted when building vocabulary
         # in frequency order
         for tok in self.specials:
-            del counter[tok]
-
-        # 保证 pad_index=0, unk_idx=1
-        self.itos.extend(self.specials)
+            del self.counter[tok]
+        if stop_words:
+            for tok in stop_words:
+                del self.counter[tok]
 
         if max_size is not None:
             max_size = max_size + len(self.specials)
 
         # sort by frequency, then alphabetically
-        words_and_frequencies = sorted(counter.items(), key=lambda tup: tup[0])
+        words_and_frequencies = sorted(self.counter.items(), key=lambda tup: tup[0])
         words_and_frequencies.sort(key=lambda tup: tup[1], reverse=True)
 
         cover = 0
@@ -413,3 +419,6 @@ class TextField(Field):
         text = [w for w in text if w not in (self.pad_token, )]
         text = " ".join(text)
         return text
+
+    def online_update_vocab(self, token_list):
+        self.counter.update(token_list)

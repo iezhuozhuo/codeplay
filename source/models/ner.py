@@ -14,8 +14,8 @@ from source.models.crf import CRF, CRFOptimized
 import source.utils.Constant as constants
 from source.modules.embedder import Embedder
 from source.modules.encoders.rnn_encoder import RNNEncoder
-from source.losses.focal_loss import FocalLoss
-from source.losses.label_smoothing import LabelSmoothingCrossEntropy
+from source.losses.criterions import FocalLoss
+from source.losses.criterions import LabelSmoothingCrossEntropy
 from source.modules.linears import PoolerEndLogits, PoolerStartLogits
 
 

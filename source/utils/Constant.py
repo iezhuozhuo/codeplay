@@ -8,3 +8,5 @@ STOP_TAG = "<STOP>"
 
 CLS = "[CLS]"
 SEP = "[SEP]"
+
+GO = "<go>"

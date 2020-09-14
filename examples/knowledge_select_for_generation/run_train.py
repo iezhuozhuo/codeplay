@@ -55,7 +55,7 @@ def main():
 
     logger.info(args)
     model_log.add_param(param_dict=vars(args), param_type='py_param')
-    model = model_class(args, embedd=embedded_pretrain, field = processor.field)
+    model = model_class(args, embedd=embedded_pretrain, field=processor.field)
     model.to(args.device)
 
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
