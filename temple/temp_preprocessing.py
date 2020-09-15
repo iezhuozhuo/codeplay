@@ -108,6 +108,7 @@ class ModelCorpus(object):
         logger.info("Saved data to '{}'".format(self.data_file))
         torch.save(self.data, self.data_file)
 
+
     @timer
     def read_data(self, data_file, data_type="train"):
         """
