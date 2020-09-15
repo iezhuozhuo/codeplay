@@ -3,7 +3,7 @@ import random
 import shutil
 import logging
 import numpy as np
-# from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score
 
 import torch
 import torch.nn.functional as F

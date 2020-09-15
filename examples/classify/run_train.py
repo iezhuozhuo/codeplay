@@ -1,10 +1,12 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+
 import random
 import numpy as np
 
 import torch
-
-from preprocessing_zh import DataProcessor, ClassifierCorpus
+from preprocessing import DataProcessor, ClassifierCorpus
+# from preprocessing_zh import DataProcessor, ClassifierCorpus
 from train_utils import set_seed, checkoutput_and_setcuda, init_logger, trainer, load_pretrain_embed, evaluate
 from ModelConfig import (
             TextCNNConfig,
@@ -28,6 +30,7 @@ MODEL_CLASSES = {
     "transformer": (TransformerClassifierModel, TransformerClassifierConfig),
     "fasttext": (FastTextModel, FastTextConfig)
 }
+
 
 
 def main():
