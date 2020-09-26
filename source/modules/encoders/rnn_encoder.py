@@ -78,6 +78,7 @@ class LSTMEncoder(nn.Module):
             rnn_inputs = inputs
 
         batch_size = rnn_inputs.size(0)
+        max_seq_length = rnn_inputs.size(1)
 
         num_valid = None
         if lengths is not None:
@@ -117,6 +118,11 @@ class LSTMEncoder(nn.Module):
                     self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
                 c = torch.cat([last_hidden[1], zeros_c], dim=1)
                 last_hidden = (h, c)
+
+            if sorted_lengths[0] < max_seq_length:
+                zeros = outputs.new_zeros(
+                    outputs.size(0), max_seq_length-sorted_lengths[0], self.rnn_hidden_size * self.num_directions)
+                outputs = torch.cat([outputs, zeros], dim=1)
 
             h, c = last_hidden
             _, inv_indices = indices.sort()
@@ -200,6 +206,7 @@ class GRUEncoder(nn.Module):
             rnn_inputs = inputs
 
         batch_size = rnn_inputs.size(0)
+        max_seq_length = rnn_inputs.size(1)
 
         if lengths is not None:
             num_valid = lengths.gt(0).int().sum().item()  # 当batch不足batch_size
@@ -231,6 +238,11 @@ class GRUEncoder(nn.Module):
                 zeros = last_hidden.new_zeros(
                     self.num_layers, batch_size - num_valid, self.rnn_hidden_size * self.num_directions)
                 last_hidden = torch.cat([last_hidden, zeros], dim=1)
+
+            if sorted_lengths[0] < max_seq_length:
+                zeros = outputs.new_zeros(
+                    outputs.size(0), max_seq_length-sorted_lengths[0], self.rnn_hidden_size * self.num_directions)
+                outputs = torch.cat([outputs, zeros], dim=1)
 
             _, inv_indices = indices.sort()
             outputs = outputs.index_select(0, inv_indices)
