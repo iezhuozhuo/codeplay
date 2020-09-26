@@ -96,7 +96,7 @@ def BasicConfig():
         help="The input test file.",
     )
     parser.add_argument(
-        "--num_train_epochs", default=30.0, type=float, help="Total number of training epochs to perform."
+        "--num_train_epochs", default=5.0, type=float, help="Total number of training epochs to perform."
     )
     parser.add_argument(
         "--per_gpu_train_batch_size", default=32, type=int, help="Batch size per GPU/CPU for training."
@@ -106,7 +106,7 @@ def BasicConfig():
     )
     parser.add_argument(
         "--max_seq_length",
-        default=25,
+        default=300,
         type=int,
         help="The maximum total input sequence length after WordPiece tokenization. Sequences "
              "longer than this will be truncated, and sequences shorter than this will be padded.",

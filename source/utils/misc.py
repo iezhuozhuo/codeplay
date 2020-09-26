@@ -12,6 +12,15 @@ import logging
 import torch
 
 
+def get_model_parameters_num(model):
+    # 记录模型参数数量
+    num_parameters = 0
+    parameters = model.parameters()
+    for parameter in parameters:
+        num_parameters += parameter.numel()
+    return num_parameters
+
+
 def set_seed(args):
     random.seed(args.seed)
     np.random.seed(args.seed)

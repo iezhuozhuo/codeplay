@@ -10,3 +10,5 @@ CLS = "[CLS]"
 SEP = "[SEP]"
 
 GO = "<go>"
+
+PAD = '[PAD]'
