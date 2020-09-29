@@ -20,7 +20,7 @@ from train_utils import evaluate
 
 from source.utils.engine import BasicConfig
 import source.utils.Constant as constants
-from source.utils.misc import set_seed, checkoutput_and_setcuda, init_logger
+from source.utils.misc import set_seed, checkoutput_and_setcuda, init_logger, get_model_parameters_num
 from source.callback.optimizater.adamw import AdamW
 from source.callback.lr_scheduler import get_linear_schedule_with_warmup
 from source.modules.embedder import Embedder
@@ -66,6 +66,9 @@ def main():
     # FIXME 定义model_class读入的参数
     model = model_class(args, embedd=embedded_pretrain)
     model.to(args.device)
+    # 打印模型的参数量
+    num_parameters = get_model_parameters_num(model)
+    logger.info('number of model parameters: {}'.format(num_parameters))
 
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
 
@@ -78,7 +81,7 @@ def main():
         eval_dataloader = processor.create_batch(data_type="valid")
 
         args.logging_steps = len(train_dataloader) // args.gradient_accumulation_steps // 5
-        args.valid_steps = len(train_dataloader)
+        args.valid_steps = len(train_dataloader) // args.gradient_accumulation_steps
 
         # FIXME valid_metric_name
         trainer_op = trainer(args=args,

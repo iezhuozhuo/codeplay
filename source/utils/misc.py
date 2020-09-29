@@ -90,6 +90,46 @@ def timer(func):
     return wrapper
 
 
+# 定制monitor metric 最简单的monitor loss
+# if EarlyStopping.early_stop break
+class EarlyStopping(object):
+    """Early stops the training if validation loss doesn't improve after a given patience."""
+    def __init__(self, patience=7, is_decreased_valid_metric=True, delta=0):
+        """
+        Args:
+            patience (int): How long to wait after last time validation loss improved.
+                            Default: 7
+            verbose (bool): If True, prints a message for each validation loss improvement.
+                            Default: False
+            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+                            Default: 0
+        TODO: 利用delta (float)
+        """
+        self.patience = patience
+        self.is_decreased_valid_metric = is_decreased_valid_metric
+        self.counter = 0
+        self.best_valid_metric = float("inf") if self.is_decreased_valid_metric else -float("inf")
+        self.early_stop = False
+        self.is_best = False
+        self.delta = delta
+
+    def __call__(self, cur_valid_metric):
+
+        if self.is_decreased_valid_metric:
+            is_best = cur_valid_metric < self.best_valid_metric
+        else:
+            is_best = cur_valid_metric > self.best_valid_metric
+        if is_best:
+            self.best_valid_metric = cur_valid_metric
+            self.counter = 0
+        else:
+            self.counter += 1
+            print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+
+        if self.counter >= self.patience:
+            self.early_stop = True
+
+
 class Pack(dict):
     """
     Pack

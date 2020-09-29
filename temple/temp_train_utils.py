@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
 from source.utils.engine import Trainer
+from source.utils.misc import EarlyStopping
 
 
 # FIXME 定制就算metric的函数
@@ -22,13 +23,14 @@ def cal_performance(preds, labels):
     assert len(preds) == len(labels)
     acc = (preds == labels).mean()
     f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
-    mertrics = {"acc": acc, "f1":f1}
+    mertrics = {"acc": acc, "f1": f1}
     return mertrics
 
 
 class trainer(Trainer):
     def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
-                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None, save_summary=False):
+                 num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, model_log=None,
+                 save_summary=False):
 
         super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, save_dir,
                          num_epochs, log_steps, valid_steps, grad_clip, lr_scheduler, model_log, save_summary)
@@ -60,6 +62,9 @@ class trainer(Trainer):
         self.best_valid_metric = float("inf") if self.is_decreased_valid_metric else -float("inf")
         self.epoch = 0
         self.global_step = 0
+        self.monitor = EarlyStopping(patience=self.args.early_stop_count,
+                                     is_decreased_valid_metric=self.is_decreased_valid_metric)
+
         self.init_message()
 
     def train_epoch(self):
@@ -113,39 +118,43 @@ class trainer(Trainer):
                 self.model.zero_grad()
                 self.global_step += 1
 
-            if self.global_step % self.log_steps == 0:
-                # logging_loss = tr_loss / self.global_step
-                self.logger.info("the current train_steps is {}".format(self.global_step))
-                self.logger.info("the current logging_loss is {}".format(loss.item()))
+                if self.global_step % self.log_steps == 0:
+                    # logging_loss = tr_loss / self.global_step
+                    self.logger.info("the current train_steps is {}".format(self.global_step))
+                    self.logger.info("the current logging_loss is {}".format(loss.item()))
 
-            if self.global_step % self.valid_steps == 0:
-                self.logger.info(self.valid_start_message)
-                self.model.to(self.args.device)
-                metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
-                cur_valid_metric = metrics[self.valid_metric_name]
-                self.model_log.add_metric(metric_name='test_loss', metric_value=metrics["loss"], epoch=self.epoch)
-                if self.is_decreased_valid_metric:
-                    is_best = cur_valid_metric < self.best_valid_metric
-                else:
-                    is_best = cur_valid_metric > self.best_valid_metric
-                if is_best:
-                    self.best_valid_metric = cur_valid_metric
-                    self.model_log.add_best_result(
-                        best_name="best_"+self.valid_metric_name, best_value=cur_valid_metric, best_epoch=self.epoch)
-                self.save(is_best)
-                self.model_log.add_metric(metric_name="test_F1", metric_value=metrics["f1"], epoch=self.epoch)
-                self.model_log.add_metric(metric_name="test_acc", metric_value=metrics["acc"], epoch=self.epoch)
+                if self.global_step % self.valid_steps == 0:
+                    self.logger.info(self.valid_start_message)
+                    self.model.to(self.args.device)
+                    metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
+                    cur_valid_metric = metrics[self.valid_metric_name]
+                    if self.model_log != None:
+                        self.model_log.add_metric(metric_name='test_loss', metric_value=metrics["loss"], epoch=self.epoch)
+                    self.monitor(cur_valid_metric)
+                    if self.monitor.early_stop:
+                        self.logger.info("There has been no improvement for {} counts".format(self.args.early_stop_count))
+                        break
+                    if self.monitor.is_best and self.model_log:
+                        self.model_log.add_best_result(
+                            best_name="best_" + self.valid_metric_name, best_value=cur_valid_metric,
+                            best_epoch=self.epoch)
+                    self.save(self.monitor.is_best)
+                    if self.model_log:
+                        self.model_log.add_metric(metric_name="test_F1", metric_value=metrics["f1"], epoch=self.epoch)
+                        self.model_log.add_metric(metric_name="test_acc", metric_value=metrics["acc"], epoch=self.epoch)
+                    self.logger.info("-" * 85 + "\n")
 
-                self.logger.info("-" * 85 + "\n")
         loss_epoch = tr_loss / nb_tr_steps
-        self.model_log.add_metric(metric_name='train_loss', metric_value=loss_epoch, epoch=self.epoch)
+        if self.model_log:
+            self.model_log.add_metric(metric_name='train_loss', metric_value=loss_epoch, epoch=self.epoch)
         # self.model_log.add_metric(
         #     metric_name="lr", metric_value=self.optimizer.state_dict()['param_groups'][0]['lr'], epoch=self.epoch)
 
     def train(self):
         if self.args.max_steps > 0:
             t_total = self.args.max_steps
-            self.args.num_train_epochs = self.args.max_steps // (len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
+            self.args.num_train_epochs = self.args.max_steps // (
+                        len(self.train_iter) // self.args.gradient_accumulation_steps) + 1
         else:
             t_total = len(self.train_iter) // self.args.gradient_accumulation_steps * self.args.num_train_epochs
 
@@ -178,20 +187,23 @@ class trainer(Trainer):
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
             self.model = torch.nn.parallel.DistributedDataParallel(
-                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank, find_unused_parameters=True,
+                self.model, device_ids=[self.args.local_rank], output_device=self.args.local_rank,
+                find_unused_parameters=True,
             )
 
         for _ in range(int(self.num_epochs)):
             self.train_epoch()
 
     def save(self, is_best=False, save_mode="best"):
-        model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
+        model_file_name = "{}_pytorch_model_epoch_{}.bin".format(self.args.model_type, self.epoch) \
+            if save_mode == "all" else "{}_pytorch_model.bin".format(self.args.model_type)
         model_file = os.path.join(
             self.save_dir, model_file_name)
         torch.save(self.model.state_dict(), model_file)
         self.logger.info("Saved model state to '{}'".format(model_file))
 
-        train_file_name = "state_epoch_{}.train".format(self.epoch) if save_mode == "all" else "state.train"
+        train_file_name = "{}_epoch_{}_config".format(self.args.model_type, self.epoch) \
+            if save_mode == "all" else "{}_config".format(self.args.model_type)
         train_file = os.path.join(
             self.save_dir, train_file_name)
         train_state = {"epoch": self.epoch,
@@ -205,8 +217,8 @@ class trainer(Trainer):
         self.logger.info("Saved train state to '{}'".format(train_file))
 
         if is_best:
-            best_model_file = os.path.join(self.save_dir, "best.model")
-            best_train_file = os.path.join(self.save_dir, "best.train")
+            best_model_file = os.path.join(self.save_dir, "best_model.bin")
+            best_train_file = os.path.join(self.save_dir, "best_model_config")
             shutil.copy(model_file, best_model_file)
             shutil.copy(train_file, best_train_file)
             self.logger.info(

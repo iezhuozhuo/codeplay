@@ -114,7 +114,7 @@ def BasicConfig():
     parser.add_argument("--logging_steps", type=int, default=None, help="Log every X updates steps.")
     parser.add_argument("--save_steps", type=int, default=None, help="Save checkpoint every X updates steps.")
     parser.add_argument("--learning_rate", default=3e-5, type=float, help="The initial learning rate for Adam.")
-
+    parser.add_argument("--early_stop_count", default=5, type=int, help="the max count of early stop")
 
     # infer case study
     parser.add_argument(
