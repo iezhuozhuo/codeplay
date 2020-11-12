@@ -141,7 +141,7 @@ def TextCNNConfig(parser):
     )
     parser.add_argument(
         "--embed_file",
-        default="/home/gong/NLPData/THUCNews/sgns.sogou.char",
+        default="D:\\BaiduNetdiskDownload\\sgns.sogou.char",
         # default=None,
         type=str,
         help="The input pretrain embedded file.",

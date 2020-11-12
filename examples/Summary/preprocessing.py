@@ -14,12 +14,12 @@ from source.utils.misc import init_logger, timer
 import source.utils.Constant as constants
 from source.inputters.field import TextField, NumberField
 
-
 logger = init_logger()
 
 
 class InputFeatures(object):
     """A single set of features of data."""
+
     def __init__(self,
                  article_ids, article_len, article_mask,
                  summary_input_ids, summary_len, summary_taget_ids, summary_mask,
@@ -99,10 +99,10 @@ class SummaGenCorpus(object):
 
         logger.info("Saved article field to '{}'".format(self.field_article_file))
         field_article = {"itos": self.field["article"].itos,
-                      "stoi": self.field["article"].stoi,
-                      "vocab_size": self.field["article"].vocab_size,
-                      "specials": self.field["article"].specials
-                      }
+                         "stoi": self.field["article"].stoi,
+                         "vocab_size": self.field["article"].vocab_size,
+                         "specials": self.field["article"].specials
+                         }
         torch.save(field_article, self.field_article_file)
 
         logger.info("Saved summary field to '{}'".format(self.field_summary_file))
@@ -153,15 +153,15 @@ class SummaGenCorpus(object):
 
         xs = [[x["article"], x["summary"]] for x in data]
         self.field["article"].build_vocab(xs,
-                                       min_freq=self.min_freq,
-                                       max_size=self.max_vocab_size)
+                                          min_freq=self.min_freq,
+                                          max_size=self.max_vocab_size)
 
     def build_examples(self, data_raw, data_type="train"):
         if data_raw == None:
             logger.info("{} data text and label can't find".format(data_type))
 
         examples, len_seq_enc, len_seq_dec, len_article_oov = [], [], [], []
-        desc_message = "GETDATA FROM " + data_type.upper()
+        desc_message = "GET DATA FROM " + data_type.upper()
         for data in tqdm(data_raw, desc=desc_message):
             article_words = str.split(data["article"])
             summary_words = str.split(data["summary"])
@@ -175,9 +175,11 @@ class SummaGenCorpus(object):
 
             article_ids, summary_ids = [], []
             for i, word in enumerate(article_words):
-                article_ids.append(self.field["article"].stoi.get(word, self.field["article"].stoi.get(constants.UNK_WORD)))
+                article_ids.append(
+                    self.field["article"].stoi.get(word, self.field["article"].stoi.get(constants.UNK_WORD)))
             for i, word in enumerate(summary_words):
-                summary_ids.append(self.field["summary"].stoi.get(word, self.field["summary"].stoi.get(constants.UNK_WORD)))
+                summary_ids.append(
+                    self.field["summary"].stoi.get(word, self.field["summary"].stoi.get(constants.UNK_WORD)))
 
             summary_input_ids = [self.field["summary"].stoi[constants.BOS_WORD]] + summary_ids
             summary_taget_ids = summary_ids[:]
@@ -220,7 +222,8 @@ class SummaGenCorpus(object):
             summary_taget_ids = self.padding_seq(summary_taget_ids, self.args.max_dec_seq_length, padding_id)
             summary_mask = self.padding_seq(summary_mask, self.args.max_dec_seq_length, padding_id)
             if self.args.pointer_gen:
-                article_ids_extend_vocab = self.padding_seq(article_ids_extend_vocab, self.args.max_enc_seq_length, padding_id)
+                article_ids_extend_vocab = self.padding_seq(article_ids_extend_vocab, self.args.max_enc_seq_length,
+                                                            padding_id)
                 # article_oovs = self.padding_seq(article_oovs, self.args.max_oov_len, padding_id)
 
             assert len(article_ids) == self.args.max_enc_seq_length
@@ -354,4 +357,3 @@ class SummaGenCorpus(object):
         word_list = list(words)
         # jieba.disable_parallel()
         return word_list
-

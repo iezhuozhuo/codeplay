@@ -168,7 +168,8 @@ class GRUEncoder(nn.Module):
                  num_layers=1,
                  bidirectional=True,
                  dropout=0.0,
-                 output_type="seq2seq"):
+                 output_type="seq2seq",
+                 init_type=""):
         super(GRUEncoder, self).__init__()
 
         self.num_directions = 2 if bidirectional else 1
@@ -186,6 +187,7 @@ class GRUEncoder(nn.Module):
         self.bidirectional = bidirectional
         self.dropout = dropout
         self.output_type= output_type
+        self.init_type = init_type
 
         self.rnn = nn.GRU(input_size=self.input_size,
                           hidden_size=self.rnn_hidden_size,
@@ -193,6 +195,7 @@ class GRUEncoder(nn.Module):
                           batch_first=True,
                           dropout=self.dropout if self.num_layers > 1 else 0,
                           bidirectional=self.bidirectional)
+        self._parameters_init()
 
     def forward(self, inputs, hidden=None):
         if isinstance(inputs, tuple):
@@ -265,6 +268,15 @@ class GRUEncoder(nn.Module):
         _, batch_size, hidden_size = hidden.size()
         return hidden.view(num_layers, 2, batch_size, hidden_size) \
             .transpose(1, 2).contiguous().view(num_layers, batch_size, hidden_size * 2)
+
+    def _parameters_init(self):
+        if self.init_type == "orthogonal":
+            ih_u = (param.data for name, param in self.rnn.named_parameters() if 'weight_ih' in name)
+            hh_u = (param.data for name, param in self.rnn.named_parameters() if 'weight_hh' in name)
+            for k in ih_u:
+                nn.init.orthogonal_(k)
+            for k in hh_u:
+                nn.init.orthogonal_(k)
 
 
 # old vision gru based

@@ -8,6 +8,7 @@ import json
 import random
 import codecs
 import numpy as np
+import pickle
 import pickle as pkl
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
@@ -357,6 +358,175 @@ class MTRSCorpus(object):
     #     return seq
 
 
+class UbuntuCorpus(object):
+    def __init__(self, args):
+        super(UbuntuCorpus, self).__init__()
+        self.args = args
+        self.vocab_file = os.path.join(self.args.data_dir, 'worddict.pkl')
+        self.embed_file = os.path.join(self.args.data_dir, 'embedding.pkl')
+
+        self.train_file = os.path.join(self.args.data_dir, 'utterances.pkl')
+        self.response_file = os.path.join(self.args.data_dir, 'responses.pkl')
+        self.eval_file = os.path.join(self.args.data_dir, 'Evaluate.pkl')
+
+        self.train_feature_file = os.path.join(self.args.output_dir, 'feature-train.pkl')
+        self.eval_feature_file = os.path.join(self.args.output_dir, 'feature-eval.pkl')
+        self.output_dir = self.args.output_dir
+        self.data_file = os.path.join(self.args.output_dir, 'data.pt')
+
+        self.load()
+
+    def load(self):
+        # 没有就build
+        if not os.path.exists(self.train_feature_file):
+            logger.info("Build Corpus ...")
+            self.build()
+        # 有就load
+        else:
+            self.load_data(self.train_feature_file)
+
+    def build(self):
+        logger.info("Reading Data ...")
+        train_examples = self.read_and_build_examples(data_type="train")
+        eval_examples = self.read_and_build_examples(data_type="eval")
+        self.data = {"train": train_examples,
+                     "eval": eval_examples
+                     }
+
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+
+        torch.save(self.data, self.data_file)
+
+    def read_and_build_examples(self, data_type='train'):
+        """
+        读取原始数据,构造样本对象MTRSExample
+        """
+        examples = []
+        # 训练集样本生成——self.data['train']
+        if data_type == "train":
+            data_to_convert = pickle.load(open(self.train_file, 'rb'))
+            n_sample = len(data_to_convert[0])
+            # 随机排序(不严格的伪随机,但是足够了)
+            rand_bias = random.randint(0, n_sample)
+            neg_response_ids = [(i + rand_bias) % n_sample for i in range(n_sample)]
+
+            for i in range(n_sample):
+                utterance = data_to_convert[0][i]
+                pos_response = data_to_convert[1][i]
+                neg_response = data_to_convert[1][neg_response_ids[i]]
+
+                examples.append(MTRSExample(guid=i,
+                                            utterences=utterance,
+                                            response=pos_response,
+                                            label=1))
+                examples.append(MTRSExample(guid=i,
+                                            utterences=utterance,
+                                            response=neg_response,
+                                            label=0))
+                # 测试集样本生成——self.data['eval']
+        if data_type == "eval":
+            data_to_convert = pickle.load(open(self.eval_file, 'rb'))
+            n_sample = len(data_to_convert[0])
+            for i in range(n_sample):
+                utterance = data_to_convert[0][i]
+                response = data_to_convert[1][i]
+                label = data_to_convert[2][i]
+                examples.append(MTRSExample(guid=i,
+                                            utterences=utterance,
+                                            response=response,
+                                            label=label))
+
+        return examples
+
+    def load_data(self):
+        # 读取data.pt
+        self.data = torch.load(self.data_file)
+
+    def create_batch(self, data_type="train"):
+        examples = self.data[data_type]
+        features_cache_path = os.path.join(
+            self.output_dir,
+            "features-{}-{}-{}.pt".format(data_type, self.args.max_seq_length, self.args.max_utter_num)
+        )
+        if os.path.exists(features_cache_path):
+            logger.info("Loading features from {} ...".format(features_cache_path))
+            features = torch.load(features_cache_path)
+        else:
+            logger.info("Convert {} examples to features".format(data_type))
+            features = self.convert_examples_to_features(examples, data_type)
+            torch.save(features, features_cache_path)
+
+        # ----------按需修改 code here----------#
+        all_utters_id = torch.tensor([f.utters_id for f in features], dtype=torch.long)
+        all_utters_len = torch.tensor([f.utters_len for f in features], dtype=torch.long)
+        all_utters_num = torch.tensor([f.utters_num for f in features], dtype=torch.long)
+        all_response_id = torch.tensor([f.response_id for f in features], dtype=torch.long)
+        all_response_len = torch.tensor([f.response_len for f in features], dtype=torch.long)
+        all_label = torch.tensor([f.label for f in features], dtype=torch.long)
+        dataset = TensorDataset(all_utters_id, all_utters_len, all_utters_num, all_response_id, all_response_len,
+                                all_label)
+
+        if data_type == "train":
+            train_sampler = RandomSampler(dataset) if self.args.local_rank == -1 else DistributedSampler(dataset)
+            dataloader = DataLoader(dataset, sampler=train_sampler, batch_size=self.args.train_batch_size)
+        else:
+            eval_sampler = SequentialSampler(dataset)
+            dataloader = DataLoader(dataset, sampler=eval_sampler, batch_size=self.args.eval_batch_size)
+        # ----------------------------------------#
+        return dataloader
+
+    def convert_examples_to_features(self, examples, data_type="train"):
+        features = []
+        desc_message = "GET Feature FROM " + data_type.upper()
+        # self.embedding=pickle.load(open(self.embed_file,'rb'),encoding='bytes')
+        for i, example in tqdm(enumerate(examples), desc=desc_message):
+            # utterance填充、截短
+            utterances = example.utterences[-self.args.max_utter_num:]
+            us_vec, us_len = [], []
+            for utterance in utterances:
+                if not utterance:
+                    continue
+                if len(utterance) <= self.args.max_seq_length:
+                    u_len = len(utterance)
+                    u_vec = utterance + [0] * (self.args.max_seq_length - len(utterance))
+                else:
+                    u_len = self.args.max_seq_length
+                    u_vec = utterance[:self.args.max_seq_length]
+                us_vec.append(u_vec)
+                us_len.append(u_len)
+
+            if len(us_vec) < self.args.max_utter_num:
+                us_len = [0] * (self.args.max_utter_num - len(utterances)) + us_len
+                us_num = len(us_vec)
+                us_vec = (self.args.max_utter_num - len(us_vec)) * [[0] * self.args.max_seq_length] + us_vec
+            else:
+                us_num = self.args.max_utter_num
+
+            assert len(us_vec) == self.args.max_utter_num
+
+            # response填充、截短
+            response = example.response
+            if len(response) <= self.args.max_seq_length:
+                r_len = len(response)
+                r_vec = response + [0] * (self.args.max_seq_length - len(response))
+            else:
+                r_len = self.args.max_seq_length
+                r_vec = response[:self.args.max_seq_length]
+
+            # 构造MTRSFeature类样本
+            features.append(MTRSFeatures(
+                utters_id=us_vec,
+                utters_len=us_len,
+                utters_num=us_num,
+                response_id=r_vec,
+                response_len=r_len,
+                label=example.label
+            ))
+
+        return features
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -424,8 +594,9 @@ if __name__ == "__main__":
     parser.add_argument("--aug", action="store_true")
 
     args, _ = parser.parse_known_args()
-    # print(args)
+    print(args)
     processor = MTRSCorpus(args)
-    # train_iter = processor.create_batch("train")
+    train_iter = processor.create_batch("train")
     valid_iter = processor.create_batch("valid")
     test_iter = processor.create_batch("test")
+

@@ -81,7 +81,7 @@ class DataProcessor(object):
             return lines
 
     @classmethod
-    def _read_text(self,input_file):
+    def _read_text(self, input_file):
         lines = []
         with open(input_file, 'r', encoding="utf-8") as f:
             words, labels = [], []

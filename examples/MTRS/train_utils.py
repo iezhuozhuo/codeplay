@@ -3,107 +3,147 @@ import random
 import shutil
 import logging
 import numpy as np
-# from sklearn.metrics import f1_score
+from tqdm import tqdm
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
 from source.utils.engine import Trainer
 
 
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
+
+# def set_seed(args):
+#     random.seed(args.seed)
+#     np.random.seed(args.seed)
+#     torch.manual_seed(args.seed)
+#     if args.n_gpu > 0:
+#         torch.cuda.manual_seed_all(args.seed)
+#
+#
+# def checkoutput_and_setcuda(args):
+#     if not os.path.exists(args.output_dir):
+#         os.makedirs(args.output_dir)
+#
+#     if (
+#         os.path.exists(args.output_dir)
+#         and os.listdir(args.output_dir)
+#         and args.do_train
+#         and not args.overwrite_output_dir
+#     ):
+#         raise ValueError(
+#             f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
+#         )
+#
+#     # Setup CUDA, GPU & distributed training
+#     if args.local_rank == -1 or args.no_cuda:
+#         args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+#         args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
+#     else:
+#         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+#         torch.cuda.set_device(args.local_rank)
+#         args.device = torch.device("cuda", args.local_rank)
+#         torch.distributed.init_process_group(backend="nccl")
+#         args.n_gpu = 1
+#
+#     return args
+#
+#
+# def init_logger(args):
+#     logger = logging.getLogger(__name__)
+#     logging.basicConfig(
+#         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+#         datefmt="%m/%d/%Y %H:%M:%S",
+#         level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
+#     )
+#     logger.warning(
+#         "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
+#         args.local_rank,
+#         args.device,
+#         args.n_gpu,
+#         bool(args.local_rank != -1),
+#         args.fp16,
+#     )
+#     return logger
 
 
-def checkoutput_and_setcuda(args):
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    if (
-        os.path.exists(args.output_dir)
-        and os.listdir(args.output_dir)
-        and args.do_train
-        and not args.overwrite_output_dir
-    ):
-        raise ValueError(
-            f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
-        )
-
-    # Setup CUDA, GPU & distributed training
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
-    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
-        args.n_gpu = 1
-    args.device = device
-    return args
+# def load_pretrain_embed(pretrain_dir, output_dir, word_to_id, emb_dim=300):
+#     filename_trimmed_dir = os.path.join(output_dir, "embedding_SougouNews.npz")
+#
+#     if os.path.exists(filename_trimmed_dir):
+#         embeddings = np.load(filename_trimmed_dir)["embeddings"].astype('float32')
+#         return embeddings
+#
+#     embeddings = np.random.rand(len(word_to_id), emb_dim)
+#     with open(pretrain_dir, "r", encoding='UTF-8') as f:
+#         for i, line in enumerate(f.readlines()):
+#             lin = line.strip().split(" ")
+#             if lin[0] in word_to_id:
+#                 idx = word_to_id[lin[0]]
+#                 emb = [float(x) for x in lin[1:301]]
+#                 embeddings[idx] = np.asarray(emb, dtype='float32')
+#         np.savez_compressed(filename_trimmed_dir, embeddings=embeddings)
+#     return embeddings
 
 
-def init_logger(args):
-    logger = logging.getLogger(__name__)
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
-    )
-    logger.warning(
-        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
-        args.local_rank,
-        args.device,
-        args.n_gpu,
-        bool(args.local_rank != -1),
-        args.fp16,
-    )
-    return logger
-
-
-def load_pretrain_embed(pretrain_dir, output_dir, word_to_id, emb_dim=300):
-    filename_trimmed_dir = os.path.join(output_dir, "embedding_SougouNews.npz")
-
-    if os.path.exists(filename_trimmed_dir):
-        embeddings = np.load(filename_trimmed_dir)["embeddings"].astype('float32')
-        return embeddings
-
-    embeddings = np.random.rand(len(word_to_id), emb_dim)
-    with open(pretrain_dir, "r", encoding='UTF-8') as f:
-        for i, line in enumerate(f.readlines()):
-            lin = line.strip().split(" ")
-            if lin[0] in word_to_id:
-                idx = word_to_id[lin[0]]
-                emb = [float(x) for x in lin[1:301]]
-                embeddings[idx] = np.asarray(emb, dtype='float32')
-        np.savez_compressed(filename_trimmed_dir, embeddings=embeddings)
-    return embeddings
-
-
-def cal_performance(preds, labels):
+#debug
+def cal_performance(preds, labels,n_options=10):
+    '''
+    calculate R10@k metric for multi-turn dialogue system:
+    R10@1 R10@2 R10@5
+    preds:(n_sample,n_options)
+    '''
     assert len(preds) == len(labels)
-    acc = (preds == labels).mean()
-    f1 = f1_score(y_true=labels, y_pred=preds, average="micro")
-    mertrics = {"acc": acc, "f1":f1}
-    return mertrics
+    total_num=len(preds)#500000
+    
+    
+    n_samples=total_num//n_options
+    
+    pred,label=torch.tensor(preds),torch.tensor(labels)
+    pred=torch.softmax(pred,dim=1)[:,1]#p(y=1|x,w)
+    
+    label=label.view(n_samples,-1)#50000x10
+    pred=pred.view(n_samples,-1)#50000x10
+    label=torch.argmax(label,dim=1,keepdim=True)#50000x1 正确选项的编号
+
+    top1_pred=torch.topk(pred,k=1,dim=-1)[1]#50000xk topk indices
+    top2_pred=torch.topk(pred,k=2,dim=-1)[1]
+    top5_pred=torch.topk(pred,k=5,dim=-1)[1]
+
+    max_label_1=label.expand_as(top1_pred)#50000x1
+    max_label_2=label.expand_as(top2_pred)#50000x2
+    max_label_5=label.expand_as(top5_pred)#50000x5
+
+    isin_1=torch.eq(max_label_1,top1_pred)#50000x1 bool
+    isin_2=torch.eq(max_label_2,top2_pred)#50000x2
+    isin_5=torch.eq(max_label_5,top5_pred)#50000x5
+
+    R10_1=torch.sum(isin_1).item()/n_samples#float
+    R10_2=torch.sum(isin_2).item()/n_samples
+    R10_5=torch.sum(isin_5).item()/n_samples
+
+    metrics = {
+        "R10@1":R10_1, 
+        "R10@2":R10_2,
+        "R10@5":R10_5
+        }
+    return metrics
 
 
 class trainer(Trainer):
-    def __init__(self, args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name="-loss", save_dir=None,
+    def __init__(self, args,model, optimizer, train_iter, eval_iter, logger, valid_metric_name="+R10@1", save_dir=None,
                  num_epochs=5, log_steps=None, valid_steps=None, grad_clip=None, lr_scheduler=None, save_summary=False):
 
-        super().__init__(args, model, optimizer, train_iter, valid_iter, logger, valid_metric_name, num_epochs,
+        super().__init__(args, model, optimizer, train_iter, eval_iter, logger, valid_metric_name, num_epochs,
                          save_dir, log_steps, valid_steps, grad_clip, lr_scheduler, save_summary)
+                         
 
         self.args = args
         self.model = model
         self.optimizer = optimizer
         self.train_iter = train_iter
-        self.valid_iter = valid_iter
+        self.eval_iter = eval_iter
         self.logger = logger
 
         self.is_decreased_valid_metric = valid_metric_name[0] == "-"
@@ -115,7 +155,8 @@ class trainer(Trainer):
         self.grad_clip = grad_clip
         self.lr_scheduler = lr_scheduler
         self.save_summary = save_summary
-
+       
+        
         if self.save_summary:
             self.train_writer = SummaryWriter(
                 os.path.join(self.save_dir, "logs", "train"))
@@ -128,17 +169,30 @@ class trainer(Trainer):
         self.init_message()
 
     def train_epoch(self):
+        
         self.epoch += 1
         train_start_message = "Training Epoch - {}".format(self.epoch)
         self.logger.info(train_start_message)
 
         tr_loss, nb_tr_examples, nb_tr_steps = 0, 0, 0
-        for batch_id, batch in enumerate(self.train_iter, 1):
-            self.model.train()
+        
+        loss_func=nn.CrossEntropyLoss()
 
-            inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(self.args.device) for t in batch)
-            pred = self.model((inputs_id, inputs_len,) + tuple(_))
-            loss = F.cross_entropy(pred, inputs_label)
+        for batch_id, batch in tqdm(enumerate(self.train_iter,1)):
+            self.model.train()
+            
+            utterance=batch[0].to(self.args.device)
+            len_utterance=batch[1].to(self.args.device)
+            num_utterance=batch[2].to(self.args.device)
+            response=batch[3].to(self.args.device)
+            len_response=batch[4].to(self.args.device)
+            properity=batch[5].to(self.args.device)
+
+            pred = self.model(
+            utterance,len_utterance,num_utterance,
+            response,len_response)
+
+            loss = loss_func(pred,properity)
 
             if self.args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu.
@@ -161,7 +215,7 @@ class trainer(Trainer):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
 
             tr_loss += loss.item()
-            nb_tr_examples += inputs_id.size(0)
+            nb_tr_examples += response.size(0)
             nb_tr_steps += 1
 
             if (batch_id + 1) % self.args.gradient_accumulation_steps == 0:
@@ -179,7 +233,7 @@ class trainer(Trainer):
             if self.global_step % self.valid_steps == 0:
                 self.logger.info(self.valid_start_message)
                 self.model.to(self.args.device)
-                metrics = evaluate(self.args, self.model, self.valid_iter, self.logger)
+                metrics = evaluate(self.args, self.model, self.eval_iter, self.logger)
                 cur_valid_metric = metrics[self.valid_metric_name]
                 if self.is_decreased_valid_metric:
                     is_best = cur_valid_metric < self.best_valid_metric
@@ -218,10 +272,12 @@ class trainer(Trainer):
             except ImportError:
                 raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
             self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=self.args.fp16_opt_level)
-
+        #single-gpu training
+        if self.args.n_gpu==1:
+            self.model=self.model.to(self.args.device)
         # multi-gpu training (should be after apex fp16 initialization)
         if self.args.n_gpu > 1:
-            self.model = torch.nn.DataParallel(self.model)
+            self.model = torch.nn.DataParallel(self.model.cuda(), device_ids=[0,1])
 
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
@@ -233,13 +289,13 @@ class trainer(Trainer):
             self.train_epoch()
 
     def save(self, is_best=False, save_mode="best"):
-        model_file_name = "state_epoch_{}.model".format(self.epoch) if save_mode == "all" else "state.model"
+        model_file_name = "{}_state_epoch_{}.model".format(self.args.fusion_type,self.epoch) if save_mode == "all" else "{}_state.model".format(self.args.fusion_type)
         model_file = os.path.join(
             self.save_dir, model_file_name)
         torch.save(self.model.state_dict(), model_file)
         self.logger.info("Saved model state to '{}'".format(model_file))
 
-        train_file_name = "state_epoch_{}.train".format(self.epoch) if save_mode == "all" else "state.train"
+        train_file_name = "{}_state_epoch_{}.train".format(self.args.fusion_type,self.epoch) if save_mode == "all" else "{}_state.train".format(self.args.fusion_type)
         train_file = os.path.join(
             self.save_dir, train_file_name)
         train_state = {"epoch": self.epoch,
@@ -253,8 +309,8 @@ class trainer(Trainer):
         self.logger.info("Saved train state to '{}'".format(train_file))
 
         if is_best:
-            best_model_file = os.path.join(self.save_dir, "best.model")
-            best_train_file = os.path.join(self.save_dir, "best.train")
+            best_model_file = os.path.join(self.save_dir,"{}_best.model".format(self.args.fusion_type))
+            best_train_file = os.path.join(self.save_dir,"{}_best.train".format(self.args.fusion_type))
             shutil.copy(model_file, best_model_file)
             shutil.copy(train_file, best_train_file)
             self.logger.info(
@@ -262,6 +318,11 @@ class trainer(Trainer):
                     best_model_file, self.valid_metric_name.upper(), self.best_valid_metric))
 
     def load(self, model_file, train_file):
+
+        if self.args.n_gpu>1:
+            self.model = torch.nn.DataParallel(self.model)
+            torch.backends.cudnn.benchmark = True
+
         model_state_dict = torch.load(
             model_file, map_location=lambda storage, loc: storage)
         self.model.load_state_dict(model_state_dict)
@@ -280,34 +341,45 @@ class trainer(Trainer):
                 train_file, self.epoch, self.best_valid_metric))
 
 
-def evaluate(args, model, valid_dataset, logger):
+def evaluate(args, model,eval_dataset, logger):
     eval_loss, nb_eval_steps = 0.0, 0
     labels, preds = None, None
     model.eval()
-    for batch in valid_dataset:
-        inputs_id, inputs_label, inputs_len, *_ = tuple(t.to(args.device) for t in batch)
+    loss_func=nn.CrossEntropyLoss()
+    for i,batch in tqdm(enumerate(eval_dataset)):
+        
+        utterance=batch[0].to(args.device)
+        len_utterance=batch[1].to(args.device)
+        num_utterance=batch[2].to(args.device)
+        response=batch[3].to(args.device)
+        len_response=batch[4].to(args.device)
+        properity=batch[5].to(args.device)
+        
         with torch.no_grad():
-            logits = model((inputs_id, inputs_len,) + tuple(_))
-            tmp_eval_loss = F.cross_entropy(logits, inputs_label)
+            logits = model(
+            utterance,len_utterance,num_utterance,
+            response,len_response) 
+            tmp_eval_loss = loss_func(logits, properity)
             if args.n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean()  # mean() to average on multi-gpu parallel evaluating
 
             eval_loss += tmp_eval_loss.item()
         nb_eval_steps += 1
-
+        
+        
         if preds is None:
             preds = logits.detach().cpu().numpy()
-            labels = inputs_label.detach().cpu().numpy()
+            labels = properity.detach().cpu().numpy()
         else:
             preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-            labels = np.append(labels, inputs_label.detach().cpu().numpy(), axis=0)
+            labels = np.append(labels, properity.detach().cpu().numpy(), axis=0)
 
     eval_loss = eval_loss / nb_eval_steps
-    preds = np.argmax(preds, axis=1)
+ 
     metrics = cal_performance(preds, labels)
-    metrics.update({"loss": eval_loss})
 
     for key in sorted(metrics.keys()):
         logger.info("  %s = %s", key.upper(), str(metrics[key]))
     return metrics
+
 

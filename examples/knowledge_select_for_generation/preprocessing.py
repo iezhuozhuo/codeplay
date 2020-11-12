@@ -30,14 +30,12 @@ logger = init_logger()
 
 dic = {'entailment': '0', 'neutral': '1', 'contradiction': '2'}
 
-
 class Example(object):
     def __init__(self, post, resp, kg, kg_index):
         self.post = post
         self.resp = resp
         self.kg = kg
         self.kg_index = kg_index
-
 
 class InputFeatures(object):
     """A single set of features of data."""
@@ -56,7 +54,6 @@ class InputFeatures(object):
         self.kg_hrt_length = kg_hrt_length
         self.kg = kg
         self.kg_index = kg_index
-
 
 class MatchCorpus(object):
     def __init__(self,
